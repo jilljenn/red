@@ -1,29 +1,32 @@
 #coding:utf-8
 
-from data import generate_data
-from policies import *
-from tools import simulate
-
 from copy import deepcopy
 import pandas as pd
 import numpy as np
 from time import time
 import matplotlib.pyplot as plt
 
+from data import synthetic
+#from policies import *
+
 params=dict(
 	nusers=250, ## number of users
 	nitems=1000, ## number of items
 	nratings=10000, ## number of ratings
 	ncategories=14, ## number of item categories
-	threshold=0.5, ## threshold on the diversity
+	
 	emb_dim=100, ## item embedding size
 	k=3, ## number of items to sample at each time
 	seed=1234, ## random seed
 	horizon=10000, ## recommendation rounds
+	
+	S=1., ## norm on item embeddings
+	Sp=1., ## norm on model parameter
+	m=1, ## feedback bound
+	sigma=0.5, ## variance in reward noise
+	
 	ndec=3, ## number of decimals to print out
 	ntests=10000, ## number of samples to compare distributions
-	with_visited=1, ## B=1 => C=1, and C=0 => B=0 use or not visited variables
-	booking_proba=lambda p : 0.9, ## P(B | C=1) or introduce a dependency in the probability of visiting p
 	gamma=0.9 ## discounting factor for the time
 )
 for param, v in params.items():
@@ -33,25 +36,27 @@ assert k<=emb_dim
 np.random.seed(seed)
 
 ## Data generation
-ratings, item_embeddings, item_categories, contexts, generator = generate_data(nusers, nitems, nratings, ncategories, emb_dim, threshold=threshold, with_visited=with_visited)
-pretty_ratings = pd.DataFrame(ratings, columns=["user","item","context","event_name","category_id","delta","visited","booking","reward"], index=range(len(ratings)))
+ratings, item_embeddings, item_categories, Phi, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim, S=S, Sp=Sp, m=m, sigma=sigma)
+pretty_ratings = pd.DataFrame(ratings, columns=["user","item","category_id","user_context","reward"], index=range(len(ratings)))
 print(pretty_ratings)
-print(f"#bookings={ratings[:,-2].astype(int).sum()}\t#visits={ratings[:,-3].astype(int).sum()}")
+print(pretty_ratings["reward"].value_counts())
+
+exit()
 
 ## TODO: what if new users?
 users = np.unique(ratings[:,0].astype(int)).tolist() 
 contexts = np.zeros((nusers, ncategories))
 
 ## Fit a policy on previous interactions
-#policy = GaussianProcess()
-policy = OnlineLearner()
-policy.fit(ratings, item_embeddings)
+policy = GaussianProcess()
+#policy = OnlineLearner()
+policy.fit(ratings, item_embeddings, item_categories, Phi)
 #recs, scores = policy.predict(int(ratings[0,0]), k, item_embeddings)
 #print((recs, scores))
 
 ## Simulate the results from the policy
 stime = time()
-cum_reward, cum_diversity_intra, cum_diversity_inter, rewards_policy, diversity_intra_policy, diversity_inter_policy, w_policy, w_oracle = simulate(k, policy, generator, users, horizon, item_embeddings, item_categories, contexts, gamma=gamma, compute_allocation=True)
+cum_reward, cum_diversity_intra, cum_diversity_inter, rewards_policy, diversity_intra_policy, diversity_inter_policy, w_policy, w_oracle = simulate(k, policy, reward, user_contexts, horizon, gamma=gamma, compute_allocation=True)
 print(f"Policy {policy.name}\tB={np.round(cum_reward, ndec)}\tD (intrabatch)={np.round(cum_diversity_intra,ndec)}\tD (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.")
 
 ## Compare to oracle policies (with access to the true distributions)

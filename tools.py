@@ -1,42 +1,58 @@
 #coding:utf-8
 
-from policies import Oracle, TrueRewardPolicy
-
 import numpy as np
 
-def simulate(k, policy, generator, users, horizon, item_embeddings, item_categories, contexts, gamma=1.0, verbose=False, compute_allocation=False):
-	oracle = Oracle()
-	oracle.fit(generator)
-	user_order = np.random.choice(users, size=horizon)
-	cum_reward, cum_diversity_intra, cum_diversity_inter = 0, 0, 0
-	rewards, diversity_intra, diversity_inter = [[0]+([None]*horizon) for _ in range(3)]
-	for t in range(1,horizon+1):
-		user = user_order[t-1]
-		recs, _ = policy.predict(user, contexts[user], k, item_embeddings, item_categories)
-		dd = oracle.diversity(item_embeddings, item_categories, recs)
-		for item_k in range(k):
-			b, c, d = oracle.reward(item_embeddings[recs[item_k]], user, contexts[user], item_categories[recs[item_k]])
-			cum_reward += b*gamma**t
-			cum_diversity_inter += d*gamma**t
-			rewards[t] = b+rewards[t-1]
-			diversity_intra[t] = d+diversity_intra[t-1]
-			policy.update(user, item_k, b, d, dd)
-		cum_diversity_intra += dd*gamma**t 
-		diversity_inter[t] = dd+diversity_inter[t-1]
-		if (verbose or (t%int(horizon//10)==0)):
-			print(f"At t={t}, {policy.name} recommends items {recs} to user {user} (b={np.round(b,3)}, c={np.round(c,3)}, dinter={np.round(d,3)}, dintra={np.round(dd,3)})")
-		contexts[user,item_categories[recs]] = 1
-	## Final allocation
-	w_policy = np.zeros(len(item_embeddings))
-	w_oracle = np.zeros(len(item_embeddings))
-	if (compute_allocation):
-		for user in users:
-			w_policy += policy.allocation(user, contexts[user], item_embeddings)
-			oracle = TrueRewardPolicy()
-			oracle.fit(generator)
-			w_oracle += oracle.allocation(user, contexts[user], item_embeddings)
-		w_policy /= len(users)
-		w_oracle /= len(users)
-	return cum_reward, cum_diversity_intra, cum_diversity_inter, rewards, diversity_intra, diversity_inter, w_policy, w_oracle
+def context_array2int(arr, m=1):
+	'''
+	Converts an array in {-m,-m+1,...,-1,0,1,...,m}^L in a string with 2m << L binary digits
+	
+	Parameters
+	----------
+	arr : array of shape (L,1)
+		contains integer values in [-m,m]
+	m : int
+		maximum value in arr
+	
+	Returns
+	-------
+	intg : str
+		contains 2m binary digits separated by commas
+	'''
+	bins = [0]*(2*m)
+	arr_bin = np.zeros((len(arr), 2*m))
+	for i in range(-m, m+1, 1):
+		if (i==0):
+			continue
+		idx_i = i+m-int(i>0)
+		arr_bin[arr==i,idx_i] = 1
+		bins[idx_i] = int("".join(map(str, arr_bin[:,idx_i].flatten().astype(int).tolist())),2)
+	return ",".join(map(str,bins))
 
-## TODO other metrics? RMSE, NDCG?
+def context_int2array(intg, L):
+	'''
+	Converts  a string with 2m binary digits into an array in {-m,-m+1,...,-1,0,1,...,m}^L
+	
+	Parameters
+	----------
+	intg : str
+		contains 2m binary digits separated by commas
+	L : int
+		length of array
+	
+	Returns
+	-------
+	arr : array of shape (L,1)
+		contains integer values in [-m,m]
+	'''
+	m = len(intg.split(","))//2
+	arr_bin = list(map(lambda x : list(map(int,list(str(bin(int(x)))[2:]))),intg.split(",")))
+	arr_bin = np.array([[0]*(L-len(x))+x for x in arr_bin]).T
+	values = np.array([i for i in range(-m, m+1, 1) if (i != 0)])
+	arr = np.array([0 if (arr_bin[i].sum()==0) else values[np.argmax(arr_bin[i])] for i in range(len(arr_bin))])
+	return arr
+	
+def test_int2array(m, L):
+	arr = np.random.choice(range(m+1), size=L)
+	intg = context_array2int(arr, m=m)
+	arr2 = context_int2array(intg, L)
+	return (arr==arr2).all()
