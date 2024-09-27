@@ -5,70 +5,52 @@ import pandas as pd
 import numpy as np
 from time import time
 import matplotlib.pyplot as plt
+import yaml
 
-from data import synthetic
-#from policies import *
+from data import synthetic, movielens
+from policies import *
+from simulate import simulate
 
-params=dict(
-	nusers=250, ## number of users
-	nitems=1000, ## number of items
-	nratings=10000, ## number of ratings
-	ncategories=14, ## number of item categories
-	
-	emb_dim=100, ## item embedding size
-	k=3, ## number of items to sample at each time
-	seed=1234, ## random seed
-	horizon=10000, ## recommendation rounds
-	
-	S=1., ## norm on item embeddings
-	Sp=1., ## norm on model parameter
-	m=1, ## feedback bound
-	sigma=0.5, ## variance in reward noise
-	
-	ndec=3, ## number of decimals to print out
-	ntests=10000, ## number of samples to compare distributions
-	gamma=0.9 ## discounting factor for the time
-)
+with open('config.yml', 'r') as f:
+	params = yaml.safe_load(f)
 for param, v in params.items():
 	globals()[param] = v
-	
 assert k<=emb_dim
+assert data_type in ["movielens","synthetic"]
 np.random.seed(seed)
 
 ## Data generation
-ratings, item_embeddings, item_categories, Phi, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim, S=S, Sp=Sp, m=m, sigma=sigma)
+ratings, item_embeddings, item_categories, Phi, reward = eval(data_type)(nusers, nitems, nratings, ncategories, emb_dim, S=S, Sp=Sp, m=m, sigma=sigma)
 pretty_ratings = pd.DataFrame(ratings, columns=["user","item","category_id","user_context","reward"], index=range(len(ratings)))
 print(pretty_ratings)
 print(pretty_ratings["reward"].value_counts())
 
-exit()
-
-## TODO: what if new users?
-users = np.unique(ratings[:,0].astype(int)).tolist() 
-contexts = np.zeros((nusers, ncategories))
-
 ## Fit a policy on previous interactions
-policy = GaussianProcess()
-#policy = OnlineLearner()
+policy = eval(policy)()
 policy.fit(ratings, item_embeddings, item_categories, Phi)
-#recs, scores = policy.predict(int(ratings[0,0]), k, item_embeddings)
-#print((recs, scores))
+
+recs, scores = policy.predict(int(ratings[-1,0]), ratings[-1,3], k, item_embeddings, item_categories)
+print(f"User {int(ratings[-1,0])} with initial context {ratings[-1,3]} recommended items {recs} with scores {np.array(scores).round(3)}")
 
 ## Simulate the results from the policy
 stime = time()
-cum_reward, cum_diversity_intra, cum_diversity_inter, rewards_policy, diversity_intra_policy, diversity_inter_policy, w_policy, w_oracle = simulate(k, policy, reward, user_contexts, horizon, gamma=gamma, compute_allocation=True)
-print(f"Policy {policy.name}\tB={np.round(cum_reward, ndec)}\tD (intrabatch)={np.round(cum_diversity_intra,ndec)}\tD (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.")
+cum_reward, cum_diversity_intra, cum_diversity_inter, rewards_policy, diversity_intra_policy, diversity_inter_policy, w_policy, w_oracle = simulate(k, policy, reward, horizon, nusers, ncategories, m, item_embeddings, item_categories, gamma=gamma, compute_allocation=True)
+print(f"Policy {policy.name}\tReward={np.round(cum_reward, ndec)}\tDiversity (intrabatch)={np.round(cum_diversity_intra,ndec)}\tDiversity (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.\n\n")
 
 ## Compare to oracle policies (with access to the true distributions)
 for oracle in [TrueRewardPolicy(), OraclePolicy()]:
-	oracle.fit(generator)
+	oracle.fit(reward, item_embeddings, item_categories)
 	stime = time()
-	cum_reward, cum_diversity_intra, cum_diversity_inter, rewards, diversity_intra, diversity_inter, _, _ = simulate(k, oracle, generator, users, horizon, item_embeddings, item_categories, contexts, gamma=gamma)
-	print(f"Oracle {oracle.name}\tB={np.round(cum_reward, ndec)}\tD (intrabatch)={np.round(cum_diversity_intra,ndec)}\tD (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.")
+	cum_reward, cum_diversity_intra, cum_diversity_inter, rewards, diversity_intra, diversity_inter, _, _ = simulate(k, oracle, reward, horizon, nusers, ncategories, m, item_embeddings, item_categories, gamma=gamma, compute_allocation=False)
+	print(f"Policy {oracle.name}\tReward={np.round(cum_reward, ndec)}\tDiversity (intrabatch)={np.round(cum_diversity_intra,ndec)}\tDiversity (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.\n\n")
 	if (oracle.name=="TrueRewardPolicy"):
 		rewards_true, diversity_intra_true, diversity_inter_true = deepcopy(rewards), deepcopy(diversity_intra), deepcopy(diversity_inter)
 	else:
 		rewards_oracle, diversity_intra_oracle, diversity_inter_oracle = deepcopy(rewards), deepcopy(diversity_intra), deepcopy(diversity_inter)
+		
+## TODO
+## check the oracle policy (recommend np.int64(99))
+## check computation of the diversity measure with DPP
 
 ## Plot the results
 _, axes = plt.subplots(nrows=1, ncols=4, figsize=(25,8))
@@ -95,9 +77,9 @@ axes[1].set_xlabel("Horizon")
 axes[2].set_xlabel("Horizon")
 axes[3].set_xlabel("Items")
 
-axes[0].set_ylabel("B")
-axes[1].set_ylabel("D(inter)")
-axes[2].set_ylabel("D(intra)")
+axes[0].set_ylabel("Reward")
+axes[1].set_ylabel("Diversity(inter)")
+axes[2].set_ylabel("Diversity(intra)")
 axes[3].set_ylabel("Counts")
 
 axes[0].legend()

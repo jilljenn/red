@@ -3,6 +3,7 @@
 import numpy as np
 from sklearn.cluster import KMeans
 from tqdm import tqdm
+from subprocess import Popen
 
 from tools import context_array2int
 
@@ -36,12 +37,11 @@ class SyntheticReward(Reward):
 		
 	def get_oracle(self, c, x, k):
 		Xk = np.tile(x.T, (self.Phi.shape[0], 1))
-		dst = self.nm*np.sqrt(np.multiply(self.Phi-Xk, self.Phi-Xk)) ## TODO add sqrt
+		dst = self.nm*np.multiply(self.Phi-Xk, self.Phi-Xk)
 		mean = c.T.dot(dst).dot(self.Theta[self.item_categories[k], :].T)
-		print(mean)
 		return mean
 
-def synthetic(nusers, nitems, nratings, ncategories, emb_dim, S=1., Sp=1., m=3, sigma=1., loc=5, scale=10):
+def synthetic(nusers, nitems, nratings, ncategories, emb_dim, S=1., Sp=1., m=3, sigma=1., loc=0, scale=1):
 	'''
 	Parameters
 	----------
@@ -95,7 +95,7 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim, S=1., Sp=1., m=3, 
 	all_pairs = np.array([(u,i) for u in range(nusers) for i in range(nitems)])
 	user_item_pairs = all_pairs[np.random.choice(len(all_pairs), size=nratings)]
 	reward = SyntheticReward(Theta, Phi, item_categories, sigma=sigma, S=S, Sp=Sp, m=m)
-	for nrat, [u, i] in enumerate(user_item_pairs.tolist()):
+	for nrat, [u, i] in tqdm(enumerate(user_item_pairs.tolist())):
 		## Get reward
 		rat = reward.get_reward(contexts[u], item_embeddings[i], i)
 		bin_context = context_array2int(contexts[u].flatten(), m)
@@ -156,4 +156,6 @@ def movielens(nusers, nitems, nratings, ncategories, emb_dim, S=1., Sp=1., m=1, 
 	reward : class Reward
 		encodes the "true" reward for the problem
 	'''
+	proc = Popen("wget -qO - https://files.grouplens.org/datasets/movielens/ml-latest-small.zip |  bsdtar -xvf-".split(" "))
+	proc.wait()
 	raise ValueError("Not implemented yet.")
