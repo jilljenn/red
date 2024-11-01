@@ -4,6 +4,8 @@ import numpy as np
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 from subprocess import Popen
+import os
+import pandas as pd
 
 from tools import context_array2int
 
@@ -120,7 +122,7 @@ class MovielensReward(object):
 	def get_oracle(self):
 		raise NotImplemented
 		
-def movielens(nusers, nitems, nratings, ncategories, emb_dim, S=1., Sp=1., m=1, sigma=1.):
+def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=None, S=1., Sp=1., m=5, sigma=None):
 	'''
 	Parameters
 	----------
@@ -156,6 +158,77 @@ def movielens(nusers, nitems, nratings, ncategories, emb_dim, S=1., Sp=1., m=1, 
 	reward : class Reward
 		encodes the "true" reward for the problem
 	'''
-	proc = Popen("wget -qO - https://files.grouplens.org/datasets/movielens/ml-latest-small.zip |  bsdtar -xvf-".split(" "))
-	proc.wait()
+	## Create the MovieLens data set
+	if (not os.path.exists("ml-latest-small/")):
+		proc = Popen("wget -qO - https://files.grouplens.org/datasets/movielens/ml-latest-small.zip |  bsdtar -xvf -".split(" "))
+		proc.wait()
+	## 1. Movie feature matrix and item categories
+	items = pd.read_csv("ml-latest-small/movies.csv", sep=",", index_col=0)
+	all_categories = items["genres"].unique()
+	all_genres = list(set([y for x in items["genres"] for y in x.split("|")]))
+	assert ncategories is None or ncategories<=len(np.unique(item_categories))
+	item_categories = np.array([np.argwhere(items.loc[i]["genres"]==all_categories).flatten() for i in items.index]).flatten()
+	## TODO
+	ncategories = len(np.unique(item_categories))
+	assert nitems is None or nitems<=items.shape[0]
+	### First example: Year + genre
+	if (emb_dim is None):
+		items["Year"] = [x.split(")")[len(x.split(")"))-2**int(len(x.split(")"))>1)].split("(")[-1].split("–")[-1] if (len(x.split("("))>1) else "0" for x in items["title"]]
+		for genre in all_genres:
+			items[genre] = [int(genre in x) for x in items["genres"]]
+		items = items[["Year"]+all_genres]
+	### Second example (sparsier): bag-of-words
+	else:
+		from sklearn.feature_extraction.text import TfidfVectorizer
+		items = pd.read_csv("ml-latest-small/movies.csv", sep=",", index_col=0)
+		corpus = [items.loc[idx]["title"]+" "+" ".join(items.loc[idx]["genres"].split("|")) for idx in items.index]
+		min_len = 4
+		try:
+			for i in range(min_len,20):
+				vectorizer = TfidfVectorizer(analyzer="word",stop_words="english",token_pattern=r"(?u)\b"+r"\w"*i+r"+\b")
+				items_mat = vectorizer.fit_transform(corpus).toarray().T
+				sparsity = items_mat.shape[0]-emb_dim
+				if (sparsity < 0):
+					min_len = i-1
+					break
+		except:
+			pass
+		vectorizer = TfidfVectorizer(analyzer="word",stop_words="english",token_pattern=r"(?u)\b"+r"\w"*min_len+r"+\b")
+		items_mat = vectorizer.fit_transform(corpus).toarray().T
+		select = np.argsort((items_mat!=0).mean(axis=1))[-emb_dim:]
+		items = pd.DataFrame(items_mat[select,:], columns=items.index, index=vectorizer.get_feature_names_out()[select]).T
+	emb_dim = items.shape[1]
+	items = items.astype(float)
+	items.index = items.index.astype(str)
+	items.columns = items.columns.astype(str)
+	## 2. Phi: embeddings of categories
+	Phi = np.zeros((ncategories, emb_dim))
+	for ncat in range(ncategories):
+		Phi[ncat,:] = items.values[item_categories==ncat,:].mean(axis=0)
+	## 3. Ratings
+	## TODO
+	raise ValueError
+	### reward
+	users = pd.read_csv("ml-latest-small/tags.csv", sep=",")
+	users["count"] = 1
+	users = pd.pivot_table(users, columns=["userId"], values=["count"], index=["tag"], aggfunc="sum", fill_value=0)
+	#users.reset_index(level=[0,0])
+	users = users.astype(float)
+	users.index = users.index.astype(str)
+	users.columns = users.columns.get_level_values(1).astype(str)
+	ratings = pd.read_csv("ml-latest-small/ratings.csv", sep=",")
+	ratings = pd.pivot_table(ratings, columns=["userId"], values=["rating"], index=["movieId"], aggfunc="mean", fill_value=0)
+	ratings = ratings.astype(float)
+	ratings.index = ratings.index.astype(str)
+	ratings.columns = ratings.columns.get_level_values(1).astype(str)
+	col_idx, row_idx = [x for x in list(ratings.columns) if (x in users.columns)], [x for x in list(ratings.columns) if (x in items.columns)]
+	users = users[col_idx]
+	items = items[row_idx]
+	ratings = ratings.loc[row_idx][col_idx]
+	threshold = int(np.max(ratings.values)/2)+1
+	ratings[(ratings!=0)&(ratings<threshold)] = -1
+	ratings[(ratings!=0)&(ratings>=threshold)] = 1
 	raise ValueError("Not implemented yet.")
+	
+if __name__=="__main__":
+	movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=100, S=1., Sp=1., m=5, sigma=None)

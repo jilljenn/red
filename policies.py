@@ -63,8 +63,78 @@ class GaussianProcess(Heuristic):
 		
 	def update(self, user, item, reward):
 		pass # no update
+
+## TODO		
+class EpsilonGreedy(Heuristic):
+	def __init__(self, eps=0.1):
+		self.eps = 0.1
+		self.gps = None
+		self.name = "epsilon_greedy"
 		
-## TODO Epsilon greedy
+	def fit(self, ratings, item_embeddings, item_categories=None, Phi=None):
+		#kernel = DotProduct(1.0, (1e-3, 1e3))
+		kernel = RBF(1.0, (1e-3, 1e3))
+		users = np.unique(ratings[:,0]).astype(int).tolist()
+		self.gps = {u : GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, alpha=1e-2) for u in users}
+		for user in users:
+			gp = self.gps[user]	
+			ratings_user0 = ratings[ratings[:,0].astype(int)==user, :]
+			X_user0 = item_embeddings[ratings_user0[:, 1].astype(int)].astype(float)
+			y_user0 = ratings_user0[:, -1].astype(float).ravel()
+			gp.fit(X_user0, y_user0)
+			
+	def predict(self, user, user_context, k, item_embeddings, item_categories=None):
+		y_pred, y_std = self.gps[user].predict(item_embeddings, return_std=True)
+		#for i, (item, pred, std) in enumerate(zip(range(len(item_embeddings)), y_pred, y_std)):
+		#	print(i, item, pred.round(5), std.round(5), ((1+pred) * std).round(5))
+		scores = np.multiply((1+y_pred), y_std)
+		return np.argsort(scores)[(-k):].tolist(), np.sort(scores)[(-k):].tolist()
+		
+	def allocation(self, user, user_context, item_embeddings):
+		y_pred, y_std = self.gps[user].predict(item_embeddings, return_std=True)
+		scores = np.multiply((1+y_pred), y_std)
+		scores -= np.min(scores)-1
+		scores /= np.sum(scores)
+		return scores
+		
+	def update(self, user, item, reward):
+		pass # no update
+		
+## TODO 
+class LinBandit(Heuristic):
+	def __init__(self, S=1.0):
+		self.thetas = []
+		self.gps = None
+		self.name = "LinBandit"
+		
+	def fit(self, ratings, item_embeddings, item_categories=None, Phi=None):
+		#kernel = DotProduct(1.0, (1e-3, 1e3))
+		kernel = RBF(1.0, (1e-3, 1e3))
+		users = np.unique(ratings[:,0]).astype(int).tolist()
+		self.gps = {u : GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, alpha=1e-2) for u in users}
+		for user in users:
+			gp = self.gps[user]	
+			ratings_user0 = ratings[ratings[:,0].astype(int)==user, :]
+			X_user0 = item_embeddings[ratings_user0[:, 1].astype(int)].astype(float)
+			y_user0 = ratings_user0[:, -1].astype(float).ravel()
+			gp.fit(X_user0, y_user0)
+			
+	def predict(self, user, user_context, k, item_embeddings, item_categories=None):
+		y_pred, y_std = self.gps[user].predict(item_embeddings, return_std=True)
+		#for i, (item, pred, std) in enumerate(zip(range(len(item_embeddings)), y_pred, y_std)):
+		#	print(i, item, pred.round(5), std.round(5), ((1+pred) * std).round(5))
+		scores = np.multiply((1+y_pred), y_std)
+		return np.argsort(scores)[(-k):].tolist(), np.sort(scores)[(-k):].tolist()
+		
+	def allocation(self, user, user_context, item_embeddings):
+		y_pred, y_std = self.gps[user].predict(item_embeddings, return_std=True)
+		scores = np.multiply((1+y_pred), y_std)
+		scores -= np.min(scores)-1
+		scores /= np.sum(scores)
+		return scores
+		
+	def update(self, user, item, reward):
+		pass # no update
 
 ########################
 ## Oracles            ##
