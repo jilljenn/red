@@ -1,6 +1,18 @@
 #coding:utf-8
 
 import numpy as np
+import torch
+import os
+import random
+
+def seed_everything(seed):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    #torch.use_deterministic_algorithms(True)
 
 def context_array2int(arr, m=1):
 	'''
@@ -30,7 +42,7 @@ def context_array2int(arr, m=1):
 
 def context_int2array(intg, L):
 	'''
-	Converts  a string with 2m binary digits into an array in {-m,-m+1,...,-1,0,1,...,m}^L
+	Converts a string with 2m binary digits into an array in {-m,-m+1,...,-1,0,1,...,m}^L
 	
 	Parameters
 	----------
