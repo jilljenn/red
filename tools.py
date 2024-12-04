@@ -13,6 +13,23 @@ def seed_everything(seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     #torch.use_deterministic_algorithms(True)
+    
+def get_available_actions(context):
+	'''
+	Get the identifiers of non-previously recommended items
+	
+	Parameters
+	--
+	context : array of shape (1, L)
+		User history
+	
+	Returns
+	--
+	action_ids : array of shape (N, 1)
+		Binary array of available actions
+	'''
+	action_ids = (context==0).ravel()
+	return action_ids
 
 def context_array2int(arr, m=1):
 	'''

@@ -10,6 +10,7 @@ import yaml
 from data import synthetic, movielens
 from policies import *
 from simulate import simulate
+from tools import *
 
 with open('config.yml', 'r') as f:
 	params = yaml.safe_load(f)
@@ -19,69 +20,41 @@ assert k<=emb_dim
 assert data_type in ["movielens","synthetic"]
 np.random.seed(seed)
 
-## Data generation
-ratings, item_embeddings, item_categories, Phi, reward = eval(data_type)(nusers, nitems, nratings, ncategories, emb_dim, S=S, Sp=Sp, m=m, sigma=sigma)
+## 1. Data generation
+if (data_type=="synthetic"):
+	ratings, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, S=S, Sp=Sp, m=m, sigma=sigma)
+elif (data_type=="movielens"):
+	ratings, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=None, sigma=sigma)
+else:
+	raise ValueError(f"{data_type} is not implemented.")
+	
 pretty_ratings = pd.DataFrame(ratings, columns=["user","item","category_id","user_context","reward"], index=range(len(ratings)))
 print(pretty_ratings)
 print(pretty_ratings["reward"].value_counts())
+	
+## 2. Fit a policy on previous interactions
+policy = eval(policy)(info)
+policy.fit(ratings)
 
-## Fit a policy on previous interactions
-policy = eval(policy)()
-policy.fit(ratings, item_embeddings, item_categories, Phi)
+user_context = context_int2array(ratings[-1,3], nitems)
+rt_ids = policy.predict(user_context, k)
+rt = reward.item_embeddings[rt_ids,:]
+yt = reward.get_reward(user_context, rt)
+# ratings[-1,3] = context_array2int(user_context, reward.m)}
+print(f"User with initial context {ratings[-1,3]} recommended items {rt_ids} with scores {np.mean(yt)}")
 
-recs, scores = policy.predict(int(ratings[-1,0]), ratings[-1,3], k, item_embeddings, item_categories)
-print(f"User {int(ratings[-1,0])} with initial context {ratings[-1,3]} recommended items {recs} with scores {np.array(scores).round(3)}")
+## 3. Simulate the results from the policy	
+user_contexts = np.array([context_int2array(uc, nitems) for uc in ratings[:,3].flatten().tolist()])
+trained_policies = [policy]
 
-## Simulate the results from the policy
 stime = time()
-cum_reward, cum_diversity_intra, cum_diversity_inter, rewards_policy, diversity_intra_policy, diversity_inter_policy, w_policy, w_oracle = simulate(k, policy, reward, horizon, nusers, ncategories, m, item_embeddings, item_categories, gamma=gamma, compute_allocation=True)
-print(f"Policy {policy.name}\tReward={np.round(cum_reward, ndec)}\tDiversity (intrabatch)={np.round(cum_diversity_intra,ndec)}\tDiversity (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.\n\n")
+results = simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=prob_new_user, verbose=verbose)
+runtime = time()-stime
+print("\n\n")
+for policy in trained_policies:
+	print(f"Policy {policy.name}\tReward={np.sum(results[policy.name][:,0])}\tDiversity (intrabatch)={np.sum(results[policy.name][:,1])}\tDiversity (interbatch)={np.sum(results[policy.name][:,2])}\tTime={runtime} sec.\n\n")
+print(f"Reward oracle\tReward={np.sum(results['oracle'][:,0])}\tDiversity (intrabatch)={np.sum(results['oracle'][:,1])}\tDiversity (interbatch)={np.sum(results['oracle'][:,2])}\tTime={runtime} sec.\n\n")
+#print(results)
 
-## Compare to oracle policies (with access to the true distributions)
-for oracle in [TrueRewardPolicy(), OraclePolicy()]:
-	oracle.fit(reward, item_embeddings, item_categories)
-	stime = time()
-	cum_reward, cum_diversity_intra, cum_diversity_inter, rewards, diversity_intra, diversity_inter, _, _ = simulate(k, oracle, reward, horizon, nusers, ncategories, m, item_embeddings, item_categories, gamma=gamma, compute_allocation=False)
-	print(f"Policy {oracle.name}\tReward={np.round(cum_reward, ndec)}\tDiversity (intrabatch)={np.round(cum_diversity_intra,ndec)}\tDiversity (interbatch)={np.round(cum_diversity_inter,ndec)}\tTime={int(time()-stime)} sec.\n\n")
-	if (oracle.name=="TrueRewardPolicy"):
-		rewards_true, diversity_intra_true, diversity_inter_true = deepcopy(rewards), deepcopy(diversity_intra), deepcopy(diversity_inter)
-	else:
-		rewards_oracle, diversity_intra_oracle, diversity_inter_oracle = deepcopy(rewards), deepcopy(diversity_intra), deepcopy(diversity_inter)
-		
-## TODO
-## check the oracle policy (recommend np.int64(99))
-## check computation of the diversity measure with DPP
-
-## Plot the results
-_, axes = plt.subplots(nrows=1, ncols=4, figsize=(25,8))
-colors = {policy.name: "blue", "TrueRewardPolicy": "magenta", "OraclePolicy": "green"}
-axes[0].plot(range(horizon+1), rewards_policy, color=colors[policy.name], label=policy.name)
-axes[0].plot(range(horizon+1), rewards_true, color=colors["TrueRewardPolicy"], label="TrueRewardPolicy")
-axes[0].plot(range(horizon+1), rewards_oracle, color=colors["OraclePolicy"], label="OraclePolicy")
-
-axes[1].plot(range(horizon+1), diversity_inter_policy, color=colors[policy.name])
-axes[1].plot(range(horizon+1), diversity_inter_true, color=colors["TrueRewardPolicy"])
-axes[1].plot(range(horizon+1), diversity_inter_oracle, color=colors["OraclePolicy"])
-
-axes[2].plot(range(horizon+1), diversity_intra_policy, color=colors[policy.name])
-axes[2].plot(range(horizon+1), diversity_intra_true, color=colors["TrueRewardPolicy"])
-axes[2].plot(range(horizon+1), diversity_intra_oracle, color=colors["OraclePolicy"])
-
-r_policy = np.random.choice(nitems, p=w_policy, size=ntests)
-r_oracle = np.random.choice(nitems, p=w_oracle, size=ntests)
-axes[3].hist(r_policy, bins=50, color=colors[policy.name], alpha=0.2)
-axes[3].hist(r_oracle, bins=50, color=colors["TrueRewardPolicy"], alpha=0.2)
-
-axes[0].set_xlabel("Horizon")
-axes[1].set_xlabel("Horizon")
-axes[2].set_xlabel("Horizon")
-axes[3].set_xlabel("Items")
-
-axes[0].set_ylabel("Reward")
-axes[1].set_ylabel("Diversity(inter)")
-axes[2].set_ylabel("Diversity(intra)")
-axes[3].set_ylabel("Counts")
-
-axes[0].legend()
-plt.savefig(f"results_{policy.name}.png", bbox_inches="tight")
-plt.close()
+## TODO plots
+## TODO check allocation

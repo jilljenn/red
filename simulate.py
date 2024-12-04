@@ -2,47 +2,72 @@
 
 import numpy as np
 from tqdm import tqdm
-from tools import context_array2int, context_int2array
+from tools import context_array2int, context_int2array, get_available_actions
 
-from policies import *
-
-def simulate(k, policy, reward, horizon, nusers, ncategories, m, item_embeddings, item_categories, gamma, compute_allocation=False, verbose=False):
-	oracle = Oracle()
-	oracle.fit(reward, item_embeddings, item_categories)
-	user_order = np.random.choice(range(nusers), size=horizon)
-	user_contexts = np.array([",".join(["0"]*(2*m))]*nusers)
-	cum_reward, cum_diversity_intra, cum_diversity_inter = 0, 0, 0
-	rewards, diversity_intra, diversity_inter = [[0]+([None]*horizon) for _ in range(3)]
+def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=0.1, gamma=1., verbose=False):
+	'''
+	Simulate some rounds of recommendations
+	
+	-- 
+	Parameters
+	k : int
+		Number of recommended items
+	horizon : int
+		Number of recommendation rounds
+	trained_policies : list of Policy class
+		Policies trained on prior ratings
+	reward : Reward class
+		Environment
+	user_contexts : array of shape (n_ratings, L)
+		Prior user contexts (integer format)
+	prob_new_user : float
+		Probability of introducing a new user (blank context) during a round
+	gamma : float
+		Discount factor
+	verbose : bool
+		Printing
+		
+	Returns
+	results : dictionary of arrays of shape (horizon, 3)
+		For each policy, reward values, diversity inside and across batches of k recommended items across rounds
+	'''
+	results = {policy.name: np.zeros((horizon, 3)) for policy in trained_policies}
+	results.update({"oracle": np.zeros((horizon, 3))})
 	for t in tqdm(range(1,horizon+1)):
-		user = user_order[t-1]
-		recs, _ = policy.predict(user, user_contexts[user], k, item_embeddings, item_categories)
-		## Diversity across batches
-		items = oracle.get_items(user_contexts[user])
-		dd = oracle.get_diversity(items, recs)
-		for item_k in range(k):
-			y = oracle.get_reward(item_k, item_embeddings[recs[item_k]], user, user_contexts[user], item_categories[recs[item_k]])
-			d = oracle.get_diversity([r for r in recs if (r != recs[item_k])], [recs[item_k]])
-			cum_reward += y*gamma**t
-			cum_diversity_inter += d*gamma**t
-			rewards[t] = y+rewards[t-1]
-			diversity_intra[t] = d+diversity_intra[t-1]
-			policy.update(user, recs[item_k], y)
-		cum_diversity_intra += dd*gamma**t 
-		diversity_inter[t] = dd+diversity_inter[t-1]
+		draw = np.random.choice([0,1], p=[1-prob_new_user, prob_new_user])
+		if (draw):
+			context = np.zeros((1, user_contexts.shape[1]))
+		else:
+			i_user = np.random.choice(range(user_contexts.shape[0]))
+			context = user_contexts[i_user]
+		available_items_ids = get_available_actions(context)
+		if (available_items_ids.sum()==0):
+			print(f"No item available for user {context_array2int(context, reward.m)}")
+			continue
+		available_items = reward.item_embeddings[available_items_ids,:] ## do not recommend again an item
+		context_embeddings = reward.item_embeddings[~available_items_ids,:]
+		for policy in trained_policies:
+			rt_ids = policy.predict(context, k, available_items=available_items)
+			rt = available_items[rt_ids,:]
+			yt = reward.get_reward(context, rt)
+			div_inter = reward.get_diversity(rt, context_embeddings=context_embeddings)
+			div_intra = reward.get_diversity(rt)
+			res = results[policy.name]
+			res[t-1,:] = [np.mean(yt)*gamma**t, div_intra, div_inter]
+			results.update({policy.name: res})
+			if (verbose or (t%int(horizon//10)==0)):
+				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(yt)}, dintra={div_intra}, dinter={div_inter})")
+		rt_ids = reward.get_oracle(context, k, available_items=available_items)
+		rt = available_items[rt_ids,:]
+		means = reward.get_means(context, rt)
+		div_inter = reward.get_diversity(rt, context_embeddings=context_embeddings)
+		div_intra = reward.get_diversity(rt)
+		res = results["oracle"]
 		if (verbose or (t%int(horizon//10)==0)):
-			print(f"At t={t}, {policy.name} recommends items {recs} to user {user} with context {user_contexts[user]} (r={np.round(y,3)}, dinter={np.round(d,3)}, dintra={np.round(dd,3)})")
-		c = context_int2array(user_contexts[user], oracle.ncats)
-		c[item_categories[recs]] = 1
-		user_contexts[user] = context_array2int(c, m) 
-	## Final average allocation
-	w_policy = np.zeros(len(item_embeddings))
-	w_oracle = np.zeros(len(item_embeddings))
-	if (compute_allocation):
-		oracle = OraclePolicy()
-		oracle.fit(reward, item_embeddings, item_categories)
-		for user in range(nusers):
-			w_policy += policy.allocation(user, user_contexts[user], item_embeddings)
-			w_oracle += oracle.allocation(user, user_contexts[user], item_embeddings)
-		w_policy /= nusers
-		w_oracle /= nusers
-	return cum_reward, cum_diversity_intra, cum_diversity_inter, rewards, diversity_intra, diversity_inter, w_policy, w_oracle
+			print(f"At t={t}, Reward Oracle recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(means)}, dintra={div_intra}, dinter={div_inter})")
+		res[t-1,:] = [np.mean(means), div_intra, div_inter]
+		results.update({"oracle": res})
+	return results
+	
+if __name__=="__main__":
+	pass
