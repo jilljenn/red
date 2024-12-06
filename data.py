@@ -180,7 +180,7 @@ class SyntheticReward(Reward):
 			The noisy observations for each of the K actions for context
 		'''
 		means = self.get_means(context, action_embeddings)
-		reward = np.clip(np.random.normal(means, self.sigma), -self.m, self.m)
+		reward = np.clip(np.random.normal(means, self.sigma), -self.m, self.m) ## TODO reward != 0?
 		return reward
 		
 	def get_diversity(self, action_embeddings, context_embeddings=None):
@@ -205,6 +205,8 @@ class SyntheticReward(Reward):
 			return np.abs(div1)
 		embs = np.concatenate((context_embeddings, action_embeddings), axis=0)
 		return np.abs(np.linalg.det(self.kernel(embs)))
+		
+	## TODO oracle for diversity?
 		
 	def get_oracle(self, context, k, available_items=None):
 		'''

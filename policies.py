@@ -28,6 +28,9 @@ class Policy(object):
 ## Algorithms         ##
 ########################
 
+## TODO LinUCB
+## TODO LinOAS
+
 class GaussianProcess(Policy):
 	def __init__(self, info):
 		self.gps = None
