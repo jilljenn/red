@@ -3,10 +3,8 @@
 import numpy as np
 from sklearn.gaussian_process.kernels import DotProduct, RBF, ConstantKernel as C
 from sklearn.gaussian_process import GaussianProcessRegressor
-#from dppy.finite_dpps import FiniteDPP
-#from sklearn.preprocessing import OneHotEncoder
 
-from tools import context_int2array
+from tools import *
 
 class Policy(object):
 	def __init__(self, info):
@@ -18,9 +16,6 @@ class Policy(object):
 	def predict(context, k, available_items=None):
 		raise NotImplemented
 		
-	def allocation(self, context):
-		raise NotImplemented
-		
 	def update(self, reward, div_intra, div_inter):
 		raise NotImplemented
 
@@ -28,25 +23,29 @@ class Policy(object):
 ## Algorithms         ##
 ########################
 
-## TODO LinUCB
-## TODO LinOAS
+## TODO Epsilon-greedy (exploit-then-commit)
+## TODO DPP: https://github.com/jilljenn/red/blob/main/notebooks/Movielens-Kaggle.ipynb
+## https://github.com/jilljenn/red/blob/main/notebooks/Gaussian%20Processes%20for%20Collaborative%20Filtering.ipynb
+## https://github.com/jilljenn/red/blob/main/notebooks/RED%20Tutorial.ipynb
 
-class GaussianProcess(Policy):
+## Concatenate the item embedding and the user context
+## and learn a single Gaussian Process
+class LogisticUCB(Policy):
 	def __init__(self, info):
-		self.gps = None
-		self.name = "GaussianProcess"
+		self.name = "LogisticUCB"
 		self.item_embeddings = info["item_embeddings"]
 		#self.kernel = DotProduct(1.0, (1e-3, 1e3))
-		self.kernel = RBF(1.0, (1e-3, 1e3))
+		self.kernel = DotProduct(1e-3)#, (1e-3, 1e3))
+		#self.kernel = RBF(1.0, (1e-3, 1e3))
 		self.gp = None
 		self.nitems = self.item_embeddings.shape[0]
 		
 	def fit(self, ratings):
 		self.gp = GaussianProcessRegressor(kernel=self.kernel, n_restarts_optimizer=10, alpha=1e-2)
-		user_contexts = np.array([context_int2array(uc, self.nitems) for uc in ratings[:,3].flatten().tolist()])
-		item_actions = self.item_embeddings.loc[self.item_embeddings.index[ratings[:,1].flatten().tolist()],:]
+		user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems) for i in range(ratings.shape[0])])
+		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]],:]
 		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
-		y_user0 = ratings[:, -1].astype(float).ravel()
+		y_user0 = np.array([get_rating_from_rating(ratings[i]) for i in range(ratings.shape[0])]).astype(float).ravel()
 		self.gp.fit(X_user0, y_user0)
 			
 	def predict(self, context, k, available_items=None):
@@ -57,18 +56,38 @@ class GaussianProcess(Policy):
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = np.concatenate((items, contexts), axis=1).astype(int).astype(float)
 		y_pred, y_std = self.gp.predict(X_user, return_std=True)
-		#for i, (item, pred, std) in enumerate(zip(range(items.shape[0]), y_pred, y_std)):
-		#	print(i, item, pred.round(5), std.round(5), ((1+pred) * std).round(5))
-		scores = np.multiply((1+y_pred), y_std)
-		return np.argsort(scores)[(-k):].tolist()
-		
-	def allocation(self, context):
-		pass
-		#y_pred, y_std = self.gps[user].predict(item_embeddings, return_std=True)
-		#scores = np.multiply((1+y_pred), y_std)
-		#scores -= np.min(scores)-1
-		#scores /= np.sum(scores)
-		#return scores
+		scores = np.multiply((1+y_pred), y_std).flatten().tolist()
+		return np.argsort(scores)[(-k):]
 		
 	def update(self, reward, div_intra, div_inter):
-		pass # no update
+		pass # no update post fit
+		
+## Concatenate the item embedding and the user context
+## use as feedback reward*diversity with respect to context
+## and learn a single Gaussian Process
+class LogisticUCBDiversity(LogisticUCB):
+	def __init__(self, info):
+		super().__init__(info)
+		self.name = "LogisticUCBDiversity"
+		
+	def fit(self, ratings):
+		self.gp = GaussianProcessRegressor(kernel=self.kernel, n_restarts_optimizer=10, alpha=1e-2)
+		user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems) for i in range(ratings.shape[0])])
+		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]]].values
+		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
+		y_user0 = np.array([get_rating_from_rating(ratings[i]) for i in range(ratings.shape[0])]).astype(float).ravel()
+		y_user0div = []
+		for i in range(ratings.shape[0]):
+			action = item_actions[i].reshape(1,-1)
+			context = user_contexts[i]
+			available_items_ids = get_available_actions(context)
+			context_embeddings = self.item_embeddings.values[~available_items_ids,:]
+			if (context_embeddings.shape[0]==0):
+				div = 1.0
+			else:
+				embs = np.concatenate((context_embeddings, action), axis=0)
+				div = np.abs(np.linalg.det(self.kernel(embs)))
+			y_user0div.append(div)
+		print((np.min(y_user0div), np.max(y_user0div)))
+		y_user0 = np.multiply( y_user0, np.array(y_user0div) )
+		self.gp.fit(X_user0, y_user0)

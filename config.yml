@@ -1,16 +1,16 @@
-nusers: 10       ## number of users
+nusers: 20       ## number of users
 nitems: 100      ## number of items
 nratings: 1000   ## number of ratings
 ncategories: 5   ## number of item categories
 data_type: "synthetic"
-policy: "GaussianProcess"
+policies: ["LogisticUCB","LogisticUCBDiversity"]
 
-emb_dim: 2       ## item embedding size
+emb_dim: 10      ## item embedding size
 emb_dim_user: 10 ## user embeddings size
-k: 2             ## number of items to sample at each time
+k: 3             ## number of items to sample at each time
 seed: 1234       ## random seed
 horizon: 100     ## recommendation rounds
-verbose: true
+verbose: false
 prob_new_user: 0.
 
 S: 1.            ## norm on item embeddings
@@ -19,5 +19,6 @@ m: 1             ## feedback bound
 sigma: 0.5       ## variance in reward noise
 
 ndec: 3          ## number of decimals to print out
-ntests: 10000    ## number of samples to compare distributions
+niters: 3        ## number of iterations
+njobs: 1         ## number of parallel jobs
 gamma: 1.0       ## discounting factor for the time

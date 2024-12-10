@@ -14,6 +14,15 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     #torch.use_deterministic_algorithms(True)
     
+def get_context_from_rating(rating):
+	return rating[4]
+	
+def get_item_from_rating(rating):
+	return rating[1]
+	
+def get_rating_from_rating(rating):
+	return rating[-1]
+    
 def get_available_actions(context):
 	'''
 	Get the identifiers of non-previously recommended items
