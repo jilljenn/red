@@ -28,20 +28,47 @@ class Policy(object):
 ## https://github.com/jilljenn/red/blob/main/notebooks/Gaussian%20Processes%20for%20Collaborative%20Filtering.ipynb
 ## https://github.com/jilljenn/red/blob/main/notebooks/RED%20Tutorial.ipynb
 
+from functools import partial
+from sklearn.gaussian_process import GaussianProcessRegressor
+import scipy.optimize
+
+## https://stackoverflow.com/questions/62376164/how-to-change-max-iter-in-optimize-function-used-by-sklearn-gaussian-process-reg
+class GPR(GaussianProcessRegressor):
+    def __init__(self, kernel=None, _max_iter=None, n_restarts_optimizer=None, alpha=None, random_state=None, **kwargs):
+        super().__init__(kernel=kernel, n_restarts_optimizer=n_restarts_optimizer, alpha=alpha, random_state=random_state, **kwargs)
+        self._max_iter = _max_iter
+
+    def _constrained_optimization(self, obj_func, initial_theta, bounds):
+        def new_optimizer(obj_func, initial_theta, bounds):
+            res = scipy.optimize.minimize(
+                obj_func,
+                initial_theta,
+                method="L-BFGS-B",
+                jac=True,
+                bounds=bounds,
+                options=dict(maxiter=self._max_iter),
+            )
+            theta_opt = res.x
+            func_min = res.fun
+            return theta_opt, func_min
+        self.optimizer = new_optimizer
+        return super()._constrained_optimization(obj_func, initial_theta, bounds)
+
 ## Concatenate the item embedding and the user context
 ## and learn a single Gaussian Process
 class LogisticUCB(Policy):
-	def __init__(self, info):
+	def __init__(self, info, random_state=1234):
 		self.name = "LogisticUCB"
+		self.random_state = random_state
 		self.item_embeddings = info["item_embeddings"]
 		#self.kernel = DotProduct(1.0, (1e-3, 1e3))
-		self.kernel = DotProduct(1e-3)#, (1e-3, 1e3))
-		#self.kernel = RBF(1.0, (1e-3, 1e3))
+		#self.kernel = DotProduct(1e-3)#, (1e-3, 1e3))
+		self.kernel = RBF(1.0, (1e-5, 1e5))
 		self.gp = None
 		self.nitems = self.item_embeddings.shape[0]
 		
 	def fit(self, ratings):
-		self.gp = GaussianProcessRegressor(kernel=self.kernel, n_restarts_optimizer=10, alpha=1e-2)
+		self.gp = GPR(kernel=self.kernel, _max_iter=1000, n_restarts_optimizer=10, alpha=1e-2, random_state=self.random_state)
 		user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems) for i in range(ratings.shape[0])])
 		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]],:]
 		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
@@ -66,12 +93,13 @@ class LogisticUCB(Policy):
 ## use as feedback reward*diversity with respect to context
 ## and learn a single Gaussian Process
 class LogisticUCBDiversity(LogisticUCB):
-	def __init__(self, info):
+	def __init__(self, info, random_state=1234):
 		super().__init__(info)
 		self.name = "LogisticUCBDiversity"
+		self.random_state = random_state
 		
 	def fit(self, ratings):
-		self.gp = GaussianProcessRegressor(kernel=self.kernel, n_restarts_optimizer=10, alpha=1e-2)
+		self.gp = GPR(kernel=self.kernel, _max_iter=1000, n_restarts_optimizer=10, alpha=1e-2, random_state=self.random_state)
 		user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems) for i in range(ratings.shape[0])])
 		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]]].values
 		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
@@ -88,6 +116,5 @@ class LogisticUCBDiversity(LogisticUCB):
 				embs = np.concatenate((context_embeddings, action), axis=0)
 				div = np.abs(np.linalg.det(self.kernel(embs)))
 			y_user0div.append(div)
-		print((np.min(y_user0div), np.max(y_user0div)))
 		y_user0 = np.multiply( y_user0, np.array(y_user0div) )
 		self.gp.fit(X_user0, y_user0)

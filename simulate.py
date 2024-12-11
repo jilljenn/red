@@ -34,7 +34,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		For each policy, reward values, diversity inside and across batches of k recommended items across rounds
 	'''
 	results = {policy.name: np.zeros((horizon, 3)) for policy in trained_policies}
-	results.update({"oracle reward": np.zeros((horizon, 3)), "oracle diversity": np.zeros((horizon, 3))})
+	#results.update({"oracle reward": np.zeros((horizon, 3)), "oracle diversity": np.zeros((horizon, 3))})
 	
 	if (aggreg=="Gabillon"):
 		aggreg_func = lambda y : np.sum(y.flatten()[y.flatten()!=0])
@@ -47,7 +47,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 	else:
 		raise ValueError(f"{aggreg} not implemented")
 	
-	for t in tqdm(range(1,horizon+1)):
+	for t in tqdm(range(1,horizon+1), leave=False):
 	
 		## draw a user context or create a new user
 		draw = np.random.choice([0,1], p=[1-prob_new_user, prob_new_user])
@@ -60,10 +60,37 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		## create the "context" embedding that is the embeddings of all *visited* items
 		available_items_ids = get_available_actions(context)
 		if (available_items_ids.sum()==0):
-			print(f"No item available for user {context_array2int(context, reward.m)}")
-			continue
+			#print(f"All items are explored for user {context_array2int(context, reward.m)}")
+			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
 		available_items = reward.item_embeddings[available_items_ids,:] ## do not recommend again an item
 		context_embeddings = reward.item_embeddings[~available_items_ids,:]
+		
+		rt_ids = reward.get_oracle_reward(context, k, available_items=available_items)
+		rt = available_items[rt_ids,:]
+		means = reward.get_means(context, rt)
+		div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0])
+		div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])
+		#res = results["oracle reward"]
+		if (verbose):# or (t%int(horizon//10)==0)):
+			print(f"At t={t}, Reward Oracle recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(means)}, dintra={div_intra}, dinter={div_inter})")
+		#res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
+		#results.update({"oracle reward": res})
+		best_reward = aggreg_func(means)
+		
+		rt_ids = reward.get_oracle_diversity(context, k, available_items=available_items)
+		rt = available_items[rt_ids,:]
+		means = reward.get_means(context, rt)
+		div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0]) ## true
+		div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])                  ## true
+		#res = results["oracle diversity"]
+		if (verbose):# or (t%int(horizon//10)==0)):
+			print(f"At t={t}, Diversity Oracle recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(means)}, dintra={div_intra}, dinter={div_inter})")
+		#res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
+		#results.update({"oracle diversity": res})
+		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids) ## to get positive regret
+		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret
+		best_diversity_intra = div_intra
+		best_diversity_inter = div_inter
 		
 		for policy in trained_policies:
 			rt_ids = policy.predict(context, k, available_items=available_items)
@@ -72,32 +99,11 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			div_inter = reward.get_diversity(rt[yt.flatten()>0,:], context=context, action_ids=rt_ids[yt.flatten()>0])
 			div_intra = reward.get_diversity(rt[yt.flatten()>0,:], action_ids=rt_ids[yt.flatten()>0])
 			res = results[policy.name]
-			res[t-1,:] = [aggreg_func(yt)*gamma**t, div_intra, div_inter]
+			#res[t-1,:] = [aggreg_func(yt)*gamma**t, div_intra, div_inter]
+			res[t-1,:] = [(best_reward - aggreg_func(yt))*gamma**t, best_diversity_intra - div_intra, best_diversity_inter - div_inter]
 			results.update({policy.name: res})
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(yt)}, dintra={div_intra}, dinter={div_inter})")
-				
-		rt_ids = reward.get_oracle_reward(context, k, available_items=available_items)
-		rt = available_items[rt_ids,:]
-		means = reward.get_means(context, rt)
-		div_inter = reward.get_diversity(rt[yt.flatten()>0,:], context=context, action_ids=rt_ids[yt.flatten()>0])
-		div_intra = reward.get_diversity(rt[yt.flatten()>0,:], action_ids=rt_ids[yt.flatten()>0])
-		res = results["oracle reward"]
-		if (verbose):# or (t%int(horizon//10)==0)):
-			print(f"At t={t}, Reward Oracle recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(means)}, dintra={div_intra}, dinter={div_inter})")
-		res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
-		results.update({"oracle reward": res})
-		
-		rt_ids = reward.get_oracle_diversity(context, k, available_items=available_items)
-		rt = available_items[rt_ids,:]
-		means = reward.get_means(context, rt)
-		div_inter = reward.get_diversity(rt[yt.flatten()>0,:], context=context, action_ids=rt_ids[yt.flatten()>0])
-		div_intra = reward.get_diversity(rt[yt.flatten()>0,:], action_ids=rt_ids[yt.flatten()>0])
-		res = results["oracle diversity"]
-		if (verbose):# or (t%int(horizon//10)==0)):
-			print(f"At t={t}, Diversity Oracle recommends items {rt_ids} to user {context_array2int(context, reward.m)} (r={np.mean(means)}, dintra={div_intra}, dinter={div_inter})")
-		res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
-		results.update({"oracle diversity": res})
 		
 	return results
 	

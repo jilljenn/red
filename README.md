@@ -1,10 +1,13 @@
-## Installation of the environment
+﻿## Installation of the environment
 
 ```bash
 conda create --name envir python=3.11.9 -y
 conda activate envir
 
 python3 -m pip install -r requirements.txt
+
+python3 -m pip cache purge
+conda clean -a -y
 ```
 
 ## Files

@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import yaml
 from joblib import Parallel, delayed, parallel_backend
 from multiprocessing import cpu_count
+from tqdm import trange
 
 from data import synthetic, movielens
 from policies import *
@@ -26,7 +27,7 @@ seed_everything(seed)
 if (data_type=="synthetic"):
 	ratings, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, S=S, Sp=Sp, m=m, sigma=sigma)
 elif (data_type=="movielens"):
-	ratings, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=emb_dim) 
+	ratings, info, reward = movielens(nusers=10, nitems=50, nratings=None, ncategories=None, emb_dim=emb_dim) 
 else:
 	raise ValueError(f"{data_type} is not implemented.")
 	
@@ -57,27 +58,27 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 	stime = time()
 	results = simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=prob_new_user, verbose=verbose)
 	runtime = time()-stime
-	print("\n\n")
-	for policy in trained_policies:
-		print(f"Policy {policy.name}\n\tReward={np.sum(results[policy.name][:,0])}\tDiversity (intrabatch)={np.sum(results[policy.name][:,1])}\tDiversity (interbatch)={np.sum(results[policy.name][:,2])}\tTime={runtime} sec.\n")
-	print(f"Reward oracle\n\tReward={np.sum(results['oracle reward'][:,0])}\tDiversity (intrabatch)={np.sum(results['oracle reward'][:,1])}\tDiversity (interbatch)={np.sum(results['oracle reward'][:,2])}\tTime={runtime} sec.\n")
-	print(f"Diversity oracle\n\tReward={np.sum(results['oracle diversity'][:,0])}\tDiversity (intrabatch)={np.sum(results['oracle diversity'][:,1])}\tDiversity (interbatch)={np.sum(results['oracle diversity'][:,2])}\tTime={runtime} sec.\n\n")
+	#print("\n\n")
+	#for policy in trained_policies:
+	#	print(f"Policy {policy.name}\n\tRegret Reward={np.sum(results[policy.name][:,0])}\tDiversity (intrabatch)={np.sum(results[policy.name][:,1])}\tDiversity (interbatch)={np.sum(results[policy.name][:,2])}\tTime={runtime} sec.\n")
+	#print(f"Reward oracle\n\tRegret Reward={np.sum(results['oracle reward'][:,0])}\tDiversity (intrabatch)={np.sum(results['oracle reward'][:,1])}\tDiversity (interbatch)={np.sum(results['oracle reward'][:,2])}\tTime={runtime} sec.\n")
+	#print(f"Diversity oracle\n\tRegret Reward={np.sum(results['oracle diversity'][:,0])}\tDiversity (intrabatch)={np.sum(results['oracle diversity'][:,1])}\tDiversity (interbatch)={np.sum(results['oracle diversity'][:,2])}\tTime={runtime} sec.\n\n")
 	return results
 	
 assert njobs==1
 
 seeds = np.random.choice(range(int(1e8)), size=niters)
 if ((niters==1) or (njobs==1)):
-	results_list = [single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, verbose, seeds[iterr]) for iterr in range(niters)]
+	results_list = [single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, verbose, seeds[iterr]) for iterr in trange(niters)]
 else:
 	with parallel_backend('loky', inner_max_num_threads=njobs):
-		results_list = Parallel(n_jobs=njobs, backend='loky')(delayed(single_run)(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, verbose, seeds[iterr]) for iterr in range(niters))
+		results_list = Parallel(n_jobs=njobs, backend='loky')(delayed(single_run)(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, verbose, seeds[iterr]) for iterr in trange(niters))
 #print(results_list)
 
 ## 3. Plots for reward and diversity
 fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(30,10))
-policies_names = policies+["oracle reward", "oracle diversity"]
-colors = {"LogisticUCB": "b", "LogisticUCBDiversity": "c", "oracle reward": "k", "oracle diversity": "g"}
+policies_names = policies#+["oracle reward", "oracle diversity"]
+colors = {"LogisticUCB": "b", "LogisticUCBDiversity": "c"}#, "oracle reward": "k", "oracle diversity": "g"}
 
 for policy_name in policies_names:
 	for i in range(3):
@@ -94,7 +95,7 @@ for policy_name in policies_names:
 		axes[i].fill_between(x.ravel(), average.ravel() - std.ravel(), average.ravel() + std.ravel(), alpha=0.2, color=colors[policy_name])
 		axes[i].set_title({0: "Reward", 1: "Diversity intra-batch", 2: "Diversity inter-batch"}[i])
 		axes[i].set_xlabel("Horizon")
-		axes[i].set_ylabel("Value")
+		axes[i].set_ylabel("Regret wrt value")
 		plt.legend()
 		
 plt.savefig("figure1.png", bbox_inches="tight")
