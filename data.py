@@ -6,384 +6,312 @@ from tqdm import tqdm
 from subprocess import Popen
 import os
 import pandas as pd
-from sklearn.gaussian_process.kernels import DotProduct, RBF, ConstantKernel as C
+from scipy.special import expit
 from sklearn.metrics.pairwise import linear_kernel, rbf_kernel
 
 from tools import *
 
+## NOTATION
+# N : #items
+# K : #recommendations
+# d : item embedding dimension
+# dp : user embedding dimension
+# r : reward model rank
+# L : number of ratings
+# U : number of users
+# C : number of categories
+
 class Reward(object):
-	def __init__(self, Theta, item_embeddings, add_params=None, sigma=0.1, m=1.):
+	def __init__(self, item_embeddings, add_params=None):
 		'''
-		Creates the object that describes the synthetic
-		environment with Gaussian rewards and ground truth
+		Creates the object that describes the reward
 		
 		---
 		Parameters
-		Theta : array of shape (1, d)
-			Low-rank factor of the underlying kernel
-		item_embeddings : array of shape (nitems, d)
-			item embeddings
-		sigma : float
-			Variance of the noisy Gaussian observations
-		m : int
-			Maximum (in absolute value) observed feedback
+		item_embeddings : array of shape (N, d)
+			the item embeddings
+		add_params : dict
+			optional additional parameters
 		'''
-		self.m = m
-		self.kernel = None
-		self.item_embeddings = item_embeddings
+		self.item_embeddings = item_embeddings/np.linalg.norm(item_embeddings)
 	
 	def get_means(self, context, action_embeddings=None):
 		'''
-		Obtains the expected reward for N>=K>=1 actions based on 
-		the current context over the total number of N items
+		Obtains the expected reward for N>=K>=1 actions 
+		for the input context
 		
 		---
 		Parameters
 		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
-		action_embeddings : array of shape (K, d)
-			Action embeddings (optional: computed on all items otherwise)
+			the feedback observed in the past
+		action_embeddings : array of shape (K, d) or None (default)
+			the action embeddings. If None, computed for all items
 			
 		---
 		Returns
-		means : array of shape (K, 1)
-			The expected rewards for all played actions for context
+		means : array of shape (K,)
+			the expected rewards for the K actions in context
 		'''
 		raise NotImplemented
 		
 	def get_reward(self, context, action_embeddings):
 		'''
-		Obtains the noisy observation for N>=K>=1 actions based on 
-		the current context over the total number of N items
+		Obtains the noisy observation for N>=K>=1 actions 
+		for the input context
 		
 		---
 		Parameters
 		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
+			the feedback observed in the past
 		action_embeddings : array of shape (K, d)
-			Action embeddings
+			the action embeddings
 			
 		---
 		Returns
-		rewards : array of shape (K, 1)
-			The noisy observations for each of the K actions for context
+		rewards : array of shape (K,)
+			the noisy observations for the K actions in context
 		'''
 		raise NotImplemented
 		
-	def get_diversity(self, action_embeddings_positive=None, context=None, action_ids=None):
+	def get_diversity(self, action_embeddings_positive, context=None, action_ids=None):
 		'''
-		Obtains the diversity across items 
+		Obtains the diversity score for N>=K>=1 actions 
+		for the input context
 		
 		---
 		Parameters
 		action_embeddings_positive : array of shape (K, d)
-			Action embeddings (only those who are *visited and booked* = reward > 0)
-		context : array of shape (1, N)
-			User context (optional)
-		action_ids : array of shape (K, 1)
-			Action identifiers (optional: computed on all items otherwise)
+			the action embeddings with positive feedback
+		context : array of shape (N, 1) or None (default)
+			the feedback observed in the past. If None, the 
+			diversity score is computed intrabatch (otherwise, interbatch)
+		action_ids : array of shape (K,) or None (default)
+			the identifiers corresponding to the action embeddings
 			
 		---
 		Returns
-		diversity_scores : array of shape (K, 1)
-			The diversity score for each of the K actions
+		diversity_scores : array of shape (K,)
+			the diversity score for the K actions in context
 		'''
 		raise NotImplemented
 		
-	def get_oracle_diversity(self, context, K, available_items=None, action_ids=None):
+	def get_oracle_diversity(self, context, K, aggreg_func=None):
 		'''
-		Obtains the optimal allocation based on 
-		the current context over the total number of N items
+		Obtains the optimal selection for the input context
+		with respect to the diversity score by greedily adding
+		new items to the selection according to their interbatch 
+		diversity score
 		
 		---
 		Parameters
 		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
+			the feedback observed in the past
 		K : int
-			Number of actions to select
-		available_items : array of shape (K, d)
-			Action embeddings
-		action_ids : array of shape (K, 1)
-			Action identifiers
+			the number of actions to select
+		aggreg_func : Python function
+			the aggregation function for diversity scores
 			
 		---
 		Returns
-		pi : array of shape (K, 1)
-			The optimal allocation for context
+		pi : array of shape (K,)
+			the optimal diversity-wise selection for context
 		'''
-		raise NotImplemented
+		assert aggreg_func is not None
+		available_items_ids = get_available_actions(context)
+		if (available_items_ids.sum()==0):
+			#print(f"All items are explored for user {context_array2int(context, self.m)}")
+			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
+		available_items = self.item_embeddings[available_items_ids,:]
+		pi = []
+		for k in range(K): ## build the oracle greedily as the function is submodular
+			vals = np.array([
+					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=context, action_ids=np.array(pi+[i])) ) 
+					for i in range(available_items.shape[0]) if (i not in pi)
+				])
+			vals = vals.flatten().tolist()
+			if (len(vals)==0):
+				break
+			pi += np.argwhere(vals == np.max(vals)).flatten().tolist()
+			if (len(pi)>=K):
+				pi = np.array(pi)[:K]
+				break 
+		all_items = np.arange(available_items_ids.shape[0])
+		pi = all_items[available_items_ids][np.array(pi)]
+		return pi
 		
-	def get_oracle_reward(self, context, K, action_embeddings=None):
+	def get_oracle_reward(self, context, K):
 		'''
-		Obtains the optimal allocation based on 
-		the current context over the total number of N items
+		Obtains the optimal selection for the input context
+		with respect to the reward 
 		
 		---
 		Parameters
 		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
+			the feedback observed in the past
 		K : int
-			Number of actions to select
+			the number of actions to select
 			
 		---
 		Returns
-		pi : array of shape (K, 1)
-			The optimal allocation for context
+		pi : array of shape (K,)
+			the optimal reward-wise selection for context
 		'''
-		raise NotImplemented
+		available_items_ids = get_available_actions(context)
+		if (available_items_ids.sum()==0):
+			#print(f"All items are explored for user {context_array2int(context, self.m)}")
+			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
+		available_items = self.item_embeddings[available_items_ids,:]
+		vals = self.get_means(context, available_items).flatten().tolist()
+		all_items = np.arange(available_items_ids.shape[0])
+		pi = all_items[available_items_ids][np.argsort(vals)[(-K):]]
+		return pi
 		
 #####################
 ## Synthetic       ##
 #####################
 		
 class SyntheticReward(Reward):
-	def __init__(self, Theta, item_embeddings, add_params=None, sigma=0.1, m=1.):
+	def __init__(self, item_embeddings, add_params=dict(theta=None, item_categories=None, p_visit=0.9)):
 		'''
-		Creates the object that describes the synthetic
-		environment with Gaussian rewards and ground truth
+		Logistic model of rewards with Gaussian noise
 		
 		---
 		Parameters
-		Theta : array of shape (1, d)
-			Low-rank factor of the underlying kernel
-		item_embeddings : array of shape (nitems, d)
-			item embeddings
-		sigma : float
-			Variance of the noisy Gaussian observations
-		m : int
-			Maximum (in absolute value) observed feedback
+		item_embeddings : array of shape (N, d)
+			the item embeddings
+		add_params : dict
+			contains 
+			theta : array of shape (r, 1), e.g., r=d+N if f_mix is the concatenation 
+				the coefficients of the linear model
+			item_categories : array of shape (N, C)
+				the item categories (binary matrix)
+			p_visit : float
+				the probability of visiting an item
 		'''
-		assert sigma>0
-		assert m>0
+		assert "theta" in add_params and add_params["theta"] is not None
+		assert "item_categories" in add_params and add_params["item_categories"] is not None
+		assert "p_visit" in add_params and add_params["p_visit"] > 0 and add_params["p_visit"] < 1
+		super().__init__(item_embeddings, add_params=add_params)
+		self.m = 1
 		self.name = "Synthetic"
-		self.Theta = Theta
-		self.sigma = sigma
-		self.item_embeddings = item_embeddings
-		self.S = np.max(np.linalg.norm(item_embeddings, axis=1))
-		self.Sp = np.max(np.linalg.norm(Theta, axis=1))
-		self.renorm = (self.S**2)*self.Sp
-		self.m = m
-		self.kernel = DotProduct(1.0, (1e-3, 1e3))
-		#self.kernel = RBF(1.0, (1e-3, 1e3))
+		self.item_categories = add_params["item_categories"]
+		self.theta = add_params["theta"]/np.linalg.norm(add_params["theta"])
+		self.p_visit = add_params["p_visit"]
+		self.kernel = linear_kernel
+		self.LAMBDA = 0.01
+		
+	def f_mix(self, action, context):
+		phi = np.concatenate((action, context), axis=0)
+		assert phi.shape[0] == self.theta.shape[0]
+		return phi
 	
 	def get_means(self, context, action_embeddings=None):
-		'''
-		Obtains the expected reward for N>=K>=1 actions based on 
-		the current context over the total number of N items
-		
-		---
-		Parameters
-		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
-		action_embeddings : array of shape (K, d)
-			Action embeddings
-			
-		---
-		Returns
-		means : array of shape (K, 1)
-			The expected rewards for all played actions for context
-		'''
 		if (action_embeddings is None):
 			action_embeddings = self.item_embeddings
-		means = np.zeros((action_embeddings.shape[0], 1))
-		for k in range(action_embeddings.shape[0]):
-			Xk = np.tile(action_embeddings[k].T, (self.item_embeddings.shape[0], 1))
-			dst = 1/self.renorm * np.power(self.item_embeddings-Xk, 2)
-			means[k] = float(context.reshape(1,-1).dot(dst).dot(self.Theta.T)[0,0])
+		K = action_embeddings.shape[0]
+		N = self.item_embeddings.shape[0]
+		means = np.zeros(K)
+		#available_items_ids = get_available_actions(context)
+		#context_categories = self.item_categories[~available_items_ids,:].sum(axis=0)
+		for k in range(K):
+			xk = self.f_mix(action_embeddings[k].reshape(-1,1), context.reshape(-1,1))
+			means[k] = self.theta.T.dot(xk)
+			#means[k] = context_categories.dot(self.Phi.dot(action_embeddings[k].reshape(-1,1)))
 		return means
 		
 	def get_reward(self, context, action_embeddings):
-		'''
-		Obtains the noisy observation for N>=K>=1 actions based on 
-		the current context over the total number of N items
-		
-		---
-		Parameters
-		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
-		action_embeddings : array of shape (K, d)
-			Action embeddings
-			
-		---
-		Returns
-		rewards : array of shape (K, 1)
-			The noisy observations for each of the K actions for context
-		'''
-		means = self.get_means(context, action_embeddings)
-		reward = np.zeros(action_embeddings.shape[0])
-		#while (reward == 0).any(): ## avoid this, as all recommended items are assumed to be seen
-		reward = np.clip(np.random.normal(means, self.sigma), -self.m, self.m).flatten()
-		reward[reward!=0] = (-1)**(reward[reward!=0]<0).astype(int)
+		K = action_embeddings.shape[0]
+		means = self.get_means(context.reshape(1,-1), action_embeddings)
+		ps = expit(means)
+		reward = np.zeros((K,))
+		p_visits = np.random.choice([0,1], p=[1-self.p_visit, self.p_visit], size=(K,))
+		for k in range(K):
+			p_book = np.random.choice([0,1], p=[1-ps[k], ps[k]])
+			reward[k] = p_visits[k] * (-1)**p_book
+			assert reward[k] in [-1, 0, 1]
 		return reward.astype(int)
 		
-	def get_diversity_det(self, action_embeddings_positive=None, context=None, action_ids=None):
+	def get_diversity(self, action_embeddings_positive=None, context=None, action_ids=None):
 		'''
-		Obtains the diversity across items 
-		
-		---
-		Parameters
-		action_embeddings_positive : array of shape (K, d)
-			Action embeddings (only those who are *visited and booked* = reward > 0)
-			(optional: computed on all items otherwise)
-		context : array of shape (1, N)
-			User context (optional)
-		action_ids : array of shape (K, 1)
-			Action identifiers
-			
-		---
-		Returns
-		diversity_score : float
-			The diversity score for all K actions compared to those in context (if provided)
-		''' 
-		if (action_embeddings_positive is None):
-			action_embeddings_positive = self.item_embeddings
-		if (len(action_embeddings_positive)==0):
-			return 0
-		div1 = np.linalg.det(self.kernel(action_embeddings_positive))
-		if (context is None or context.sum()==0):
-			return np.abs(div1)
-		available_items_ids = get_available_actions(context)
-		context_embeddings = self.item_embeddings[~available_items_ids,:]
-		embs = np.concatenate((context_embeddings, action_embeddings_positive), axis=0)
-		div2 = np.abs(np.linalg.det(self.kernel(embs)))
-		return div2
-		
-	def get_diversity(self, action_embeddings_positive=None, context=None, action_ids=None, LAMBDA = 0.01):
-		'''
-		Obtains the diversity across items 
-		Ridge leverage scores from [1, Def 1] 
+		Obtains the diversity across items by computing
+		ridge leverage scores from [1, Def 1] with a linear kernel
+		on the item categories
 		
 		[1] Musco, Cameron, and Christopher Musco. "Recursive sampling for the nystrom method." 
 		Advances in neural information processing systems 30 (2017).
-		
-		---
-		Parameters
-		action_embeddings_positive : array of shape (K, d)
-			Action embeddings (only those who are *visited and booked* = reward > 0)
-			(optional: computed on all items otherwise)
-		context : array of shape (1, N)
-			User context (optional)
-		action_ids : array of shape (K, 1)
-			Action identifiers
-			
-		---
-		Returns
-		diversity_score : float
-			The diversity score for each of the K actions and those in context (if provided)
 		''' 
-		if (action_embeddings_positive is None):
+		if ((action_embeddings_positive is None) or (action_ids is None)):
 			action_embeddings_positive = self.item_embeddings
+			actions_ids = np.arange(self.item_embeddings.shape[0])
 		## from https://github.com/jilljenn/red/blob/main/notebooks/RED%20Tutorial.ipynb
 		def compute_leverage_scores(embs):
-			kernel = linear_kernel(embs)
-			return np.diagonal(kernel @ np.linalg.inv(kernel + LAMBDA * np.identity(len(kernel))))
-		if (len(action_embeddings_positive)==0):
+			kernel = self.kernel(embs)
+			return ( np.diagonal(kernel @ np.linalg.inv(kernel + self.LAMBDA * np.identity(len(kernel)))) ).ravel()
+		if (len(action_embeddings_positive)==0 or len(action_ids)==0):
 			return 0
-		eff_dim = np.sum(compute_leverage_scores(action_embeddings_positive)) ## when summed => effective dimension
+		action_categories = self.item_categories[action_ids,:]
+		scores = compute_leverage_scores(action_categories)
 		if (context is None or context.sum()==0):
-			return eff_dim
+			return scores
 		available_items_ids = get_available_actions(context)
-		context_embeddings = self.item_embeddings[~available_items_ids,:]
-		embs = np.concatenate((context_embeddings, action_embeddings_positive), axis=0)
-		eff_dim = np.sum(compute_leverage_scores(self.kernel(embs))) ## when summed => effective dimension
-		return eff_dim
-		
-	def get_oracle_diversity(self, context, k, available_items=None, action_ids=None):
-		'''
-		Obtains the optimal allocation based on diversity,
-		the current context over the total number of N items
-		
-		---
-		Parameters
-		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
-		k : int
-			Number of actions to select
-		available_items : array of shape (X, 1)
-			Item embeddings available for recommendation
-		action_ids : array of shape (K, 1)
-			Action identifiers
-			
-		---
-		Returns
-		pi : array of shape (K, 1)
-			The optimal allocation for context
-		'''
-		item_set = self.item_embeddings if (available_items is None) else available_items
-		means = [self.get_diversity(item_set[i].reshape(1,-1), context=context, action_ids=[i]) for i in range(item_set.shape[0])]
-		return np.argsort(means)[-k:]
-		
-	def get_oracle_reward(self, context, k, available_items=None):
-		'''
-		Obtains the optimal allocation based on rewards,
-		the current context over the total number of N items
-		
-		---
-		Parameters
-		context : array of shape (N, 1)
-			The feedback observed for some actions in the past
-		k : int
-			Number of actions to select
-		available_items : array of shape (X, 1)
-			Item embeddings available for recommendation
-			
-		---
-		Returns
-		pi : array of shape (K, 1)
-			The optimal allocation for context
-		'''
-		means = self.get_means(context, self.item_embeddings if (available_items is None) else available_items).flatten().tolist()
-		return np.argsort(means)[-k:]
+		context_categories = self.item_categories[~available_items_ids,:]
+		#context_embeddings = self.item_embeddings[~available_items_ids,:]
+		embs = np.concatenate((action_categories, context_categories), axis=0)
+		scores = compute_leverage_scores(embs)
+		return scores
 	
-def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=10, S=1., Sp=1., m=3, sigma=1., loc=0, scale=1):
+def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=10, m=1, loc=0, scale=1, p_visit=0.9):
 	'''
 	Parameters
 	----------
 	nusers : int
-		number of users
+		the number U of users
 	nitems : int
-		number of items
+		the number N of items
 	nratings : int
-		number of ratings user-item to generate
+		the number L of ratings user-item to generate
 	ncategories : int
-		number of (non necessarily distinct) item categories to identify
+		the number C of (non necessarily distinct) 
+		item categories to identify
 	emb_dim : int
-		number of dimensions for item embeddings
+		the number d of dimensions for item embeddings
 	emb_dim_user : int
-		number of dimensions for user embeddings
-	S : float
-		maximum norm of item embeddings
-	Sp : float
-		maximum norm of Theta parameter
+		the number dp of dimensions for user embeddings
 	m : int
-		maximum feedback value in absolute value
-	sigma : float
-		variance of the subgaussian reward noise
+		the maximum feedback value in absolute value
+	loc : float
+		the mean of the data generating Gaussian distribution
+	scale : float
+		the standard deviation of the data generating Gaussian distribution
+	p_visit : float
+		the probability of visiting a recommended item
 		
 	Returns
 	-------
-	ratings : array of shape (nratings, 5)
+	ratings : array of shape (L, 5)
 		each row comprises the user identifier, the item identifier, 
 		the number of times the user has seen the item,
-		the item categories in binary, the user context in 2m binary integers, 
+		the item categories in binary, the user context in 2*m binary integers, 
 		the (integer) reward
-	item_embeddings : array of shape (nitems, emb_dim)
-		item embeddings
-	user_embeddings : array of shape (nusers, emb_dim)
-		user embeddings
-	item_categories : array of (nitems, ncategories)
-		category annotations for each item
-	Phi : array of (ncategories, emb_dim)
-		centroids for each category of items
+	info : dict
+		contains the following entries
+		item_embeddings : array of shape (N, d)
+			the item embeddings
+		user_embeddings : array of shape (U, dp)
+			the user embeddings
+		item_categories : array of (N, C)
+			the category annotations for each item
+		Phi : array of (C, d)
+			the centroids for each category of items
 	reward : class Reward
-		encodes the "true" reward for the problem
+		the ground-truth reward for the problem
 	'''
 	## Generate item embeddings
 	item_embeddings = np.random.normal(loc, scale, size=(nitems, emb_dim))
-	item_embeddings /= np.linalg.norm(item_embeddings)/S
+	item_embeddings /= np.linalg.norm(item_embeddings)
 	## Generate user embeddings
 	user_embeddings = np.random.normal(loc, scale, size=(nusers, emb_dim_user))
-	user_embeddings /= np.linalg.norm(user_embeddings)/S
+	user_embeddings /= np.linalg.norm(user_embeddings)
 	## Define item categories
 	item_cluster = KMeans(n_clusters=ncategories)
 	item_cluster.fit(item_embeddings)
@@ -391,9 +319,14 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 	for ncat in range(ncategories):
 		item_categories[:,ncat] = item_cluster.labels_==ncat
 	Phi = item_cluster.cluster_centers_
-	## Define model parameter
-	Theta = np.random.normal(loc, scale, size=(1, emb_dim))
-	Theta /= np.linalg.norm(Theta)/Sp
+	Phi /= np.linalg.norm(Phi)
+	## Generate model coefficients
+	theta = np.random.normal(loc, scale, size=(nitems+emb_dim, 1))
+	theta /= np.linalg.norm(theta)
+	#M = np.eye(nitems)
+	#means = item_embeddings.dot(theta[:item_embeddings.shape[1],:]) + M.dot(theta[item_embeddings.shape[1]:,:])
+	#print(means)
+	#print(expit(means))
 	## Define user contexts
 	## However, in the next recommendation, the user sees only once each item
 	npulls = np.zeros((nusers, nitems))
@@ -402,14 +335,15 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 	ratings = [None]*nratings
 	all_pairs = np.array([(u,i) for u in range(nusers) for i in range(nitems)])
 	user_item_pairs = all_pairs[np.random.choice(len(all_pairs), size=nratings)]
-	reward = SyntheticReward(Theta, item_embeddings, sigma=sigma, m=m)
+	reward = SyntheticReward(item_embeddings, add_params=dict(theta=theta, item_categories=item_categories, p_visit=p_visit))
 	for nrat, [u, i] in tqdm(enumerate(user_item_pairs.tolist())):
 		## Get reward
 		rat = 0
-		while (rat == 0): ## avoid rewards = 0 as all items here are supposed to be visited
+		while (rat == 0): ## avoid rewards = 0 as all items here are supposed to be visited here
 			rat = int(reward.get_reward(contexts[u], item_embeddings[i].reshape(1,-1)))
 		bin_context = context_array2int(contexts[u].flatten(), m)
-		ratings[nrat] = [u, i, npulls[u,i], "".join(list(map(lambda x : str(int(x)), item_categories[i]))), bin_context, rat]
+		bin_cats = "".join(list(map(lambda x : str(int(x)), item_categories[i])))
+		ratings[nrat] = [u, i, npulls[u,i], bin_cats, bin_context, rat]
 		## Update user context
 		contexts[u, i] = (npulls[u,i]*contexts[u, i]+rat)/(npulls[u,i]+1)
 		npulls[u,i] += 1
@@ -418,7 +352,7 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 	user_embeddings = pd.DataFrame(user_embeddings, index=range(nusers), columns=range(emb_dim_user))
 	item_categories = pd.DataFrame(item_categories.astype(int), index=range(nitems), columns=range(ncategories))
 	Phi = pd.DataFrame(Phi, index=range(ncategories), columns=range(emb_dim))
-	return ratings, {"item_embeddings": item_embeddings, "user_embeddings": user_embeddings, "item_categories": item_categories, "category_embeddings": Phi}, reward
+	return ratings, {"item_embeddings": item_embeddings, "user_embeddings": user_embeddings, "item_categories": item_categories, "Phi": Phi}, reward
 	
 #####################
 ## MovieLens       ##
@@ -432,9 +366,9 @@ from torchmetrics import Accuracy, R2Score
 from sklearn.metrics.pairwise import cosine_similarity
 
 class MovieLensReward(SyntheticReward):
-	def __init__(self, Theta, item_embeddings, add_params=None, sigma=1., m=1.):
+	def __init__(self, item_embeddings, add_params=dict(theta=None, sigma=0.01)):
 		self.item_categories = add_params["item_categories"]
-		super(self).__init__(Theta, item_embeddings, sigma=sigma, m=1.)
+		super().__init__(Theta, item_embeddings, sigma=sigma, m=1.)
 		
 	def get_reward(self, context, action_embeddings=None):
 		## Reward if visited and booked: +1
@@ -707,6 +641,15 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 	#ratings[(ratings!=0)&(ratings<threshold)] = -1
 	#ratings[(ratings!=0)&(ratings>=threshold)] = 1
 	## Filter
+	print("Items")
+	print(item_embeddings.shape == (nitems, emb_dim))
+	print("Users")
+	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print("Categories")
+	print(item_categories.shape == (nitems, ncategories))
+	print("Phi")
+	print(Phi.shape == (ncategories, emb_dim))
+	print("_________")
 	if (nratings is not None):
 		assert nratings is None or nratings<=ratings.shape[0]
 		ratings_list = np.array(np.argwhere(ratings.values!=0).tolist()[:nratings])
@@ -721,6 +664,15 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		idx = item_categories.sum(axis=0)>0
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx]
+	print("Items")
+	print(item_embeddings.shape == (nitems, emb_dim))
+	print("Users")
+	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print("Categories")
+	print(item_categories.shape == (nitems, ncategories))
+	print("Phi")
+	print(Phi.shape == (ncategories, emb_dim))
+	print("_________")
 	if (nitems is not None) and (nitems<=items.shape[0]):
 		item_idx = ratings.sum(axis=1).sort_values(ascending=False).index[:nitems]
 		ratings = ratings.loc[item_idx]
@@ -731,6 +683,15 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		idx = item_categories.sum(axis=0)>0
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx] 
+	print("Items")
+	print(item_embeddings.shape == (nitems, emb_dim))
+	print("Users")
+	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print("Categories")
+	print(item_categories.shape == (nitems, ncategories))
+	print("Phi")
+	print(Phi.shape == (ncategories, emb_dim))
+	print("_________")
 	if (nusers is not None) and (nusers<=users.shape[0]):
 		user_idx = ratings.sum(axis=0).sort_values(ascending=False).index[:nusers]
 		ratings = ratings[user_idx]
@@ -741,8 +702,18 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		idx = item_categories.sum(axis=0)>0
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx]
+	print("Items")
+	print(item_embeddings.shape == (nitems, emb_dim))
+	print("Users")
+	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print("Categories")
+	print(item_categories.shape == (nitems, ncategories))
+	print("Phi")
+	print(Phi.shape == (ncategories, emb_dim))
+	print("_________")
+	raise ValueError
 	nitems = items.shape[0] 
-	nratings = int(ratings.abs().sum().sum())
+	nratings = int((ratings!=0).sum().sum())
 	nusers = users.shape[0] 
 	ncategories = item_categories.shape[1]
 	## Define user contexts
@@ -755,7 +726,11 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		## Get reward
 		rat = ratings.values[i,u]-threshold
 		bin_context = context_array2int(contexts[u].flatten(), threshold)
-		item_cat = "".join(list(map(str,item_categories[[items.index[i]]].values.flatten().tolist())))
+		print("")
+		print(item_categories.shape)
+		print(items.shape)
+		print(Phi.shape)
+		item_cat = "".join(list(map(str,item_categories.loc[items.index[i]].values.flatten().tolist())))
 		ratings_[nrat] = [u, i, npulls[u,i], item_cat, bin_context, rat]
 		## Update user context
 		contexts[u, i] = (contexts[u, i]*npulls[u,i]+rat)/(npulls[u,i]+1)
@@ -778,9 +753,30 @@ if __name__=="__main__":
 	emb_dim=512
 	emb_dim_user=11
 	print("_"*27)
-	if (False):
+	if (True):
 		print("SYNTHETIC")
 		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, S=1., Sp=1., m=3, sigma=1., loc=0, scale=1)
+		print("Ratings")
+		print(ratings_.shape)
+		print(ratings_[:5,:])
+		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "category_embeddings"]]
+		print("Items")
+		print(item_embeddings.shape == (nitems, emb_dim))
+		print("Users")
+		print(user_embeddings.shape == (nusers, emb_dim_user))
+		print("Categories")
+		print(item_categories.shape == (nitems, ncategories))
+		print("Phi")
+		print(Phi.shape == (ncategories, emb_dim))
+		print(get_context_from_rating(ratings_[-1]))
+		context = context_int2array(get_context_from_rating(ratings_[-1]), nitems)
+		action_emb = item_embeddings.loc[item_embeddings.index[0]].values.reshape(1,-1)
+		print(reward.get_reward(context, action_emb))
+		print(reward.get_means(context, action_emb))
+		print("_"*27)
+	if (False): ## TODO retest Movielens
+		print("MOVIELENS")
+		ratings_, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=8) 
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
@@ -799,23 +795,3 @@ if __name__=="__main__":
 		print(reward.get_reward(context, action_emb))
 		print(reward.get_means(context, action_emb))
 		print("_"*27)
-	print("MOVIELENS")
-	ratings_, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=8) 
-	print("Ratings")
-	print(ratings_.shape)
-	print(ratings_[:5,:])
-	item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "category_embeddings"]]
-	print("Items")
-	print(item_embeddings.shape == (nitems, emb_dim))
-	print("Users")
-	print(user_embeddings.shape == (nusers, emb_dim_user))
-	print("Categories")
-	print(item_categories)
-	print("Phi")
-	print(Phi)
-	print(get_context_from_rating(ratings_[-1]))
-	context = context_int2array(get_context_from_rating(ratings_[-1]), nitems)
-	action_emb = item_embeddings.loc[item_embeddings.index[0]].values.reshape(1,-1)
-	print(reward.get_reward(context, action_emb))
-	print(reward.get_means(context, action_emb))
-	print("_"*27)

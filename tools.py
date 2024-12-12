@@ -30,12 +30,12 @@ def get_available_actions(context):
 	Parameters
 	--
 	context : array of shape (1, L)
-		User history
+		the user history
 	
 	Returns
 	--
 	action_ids : array of shape (N, 1)
-		Binary array of available actions
+		the binary array of available actions
 	'''
 	action_ids = (context==0).ravel()
 	return action_ids
@@ -49,7 +49,7 @@ def context_array2int(arr, m=1):
 	arr : array of shape (L,1)
 		contains integer values in [-m,m]
 	m : int
-		maximum value in arr
+		the maximum value in arr
 	
 	Returns
 	-------
@@ -75,7 +75,7 @@ def context_int2array(intg, L):
 	intg : str
 		contains 2m binary digits separated by commas
 	L : int
-		length of array
+		the length of array
 	
 	Returns
 	-------

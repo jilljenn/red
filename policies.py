@@ -3,30 +3,48 @@
 import numpy as np
 from sklearn.gaussian_process.kernels import DotProduct, RBF, ConstantKernel as C
 from sklearn.gaussian_process import GaussianProcessRegressor
+import warnings
+from sklearn.exceptions import ConvergenceWarning
 
 from tools import *
 
 class Policy(object):
 	def __init__(self, info):
+		'''
+		Obtains the optimal selection for the input context
+		with respect to the diversity score
+		
+		---
+		Parameters
+		context : array of shape (N, 1)
+			the feedback observed in the past
+		K : int
+			the number of actions to select
+			
+		---
+		Returns
+		pi : array of shape (K,)
+			the optimal diversity-wise selection for context
+		'''
 		self.name = "Policy"
 		
 	def fit(self, ratings):
 		raise NotImplemented
 		
-	def predict(context, k, available_items=None):
+	def predict(context, k):
 		raise NotImplemented
 		
 	def update(self, reward, div_intra, div_inter):
 		raise NotImplemented
-
-########################
-## Algorithms         ##
-########################
-
+		
 ## TODO Epsilon-greedy (exploit-then-commit)
 ## TODO DPP: https://github.com/jilljenn/red/blob/main/notebooks/Movielens-Kaggle.ipynb
 ## https://github.com/jilljenn/red/blob/main/notebooks/Gaussian%20Processes%20for%20Collaborative%20Filtering.ipynb
 ## https://github.com/jilljenn/red/blob/main/notebooks/RED%20Tutorial.ipynb
+
+########################
+## Algorithms         ##
+########################
 
 from functools import partial
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -73,18 +91,22 @@ class LogisticUCB(Policy):
 		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]],:]
 		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
 		y_user0 = np.array([get_rating_from_rating(ratings[i]) for i in range(ratings.shape[0])]).astype(float).ravel()
-		self.gp.fit(X_user0, y_user0)
+		with warnings.catch_warnings():
+			warnings.filterwarnings("ignore", category=ConvergenceWarning)
+			self.gp.fit(X_user0, y_user0)
 			
-	def predict(self, context, k, available_items=None):
-		if (available_items is None):
-			items = self.item_embeddings
-		else:
-			items = available_items
+	def predict(self, context, k):
+		available_items_ids = get_available_actions(context)
+		if (available_items_ids.sum()==0):
+			#print(f"All items are explored for user {context_array2int(context, 1)}")
+			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
+		items = self.item_embeddings.values[available_items_ids,:]
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = np.concatenate((items, contexts), axis=1).astype(int).astype(float)
 		y_pred, y_std = self.gp.predict(X_user, return_std=True)
-		scores = np.multiply((1+y_pred), y_std).flatten().tolist()
-		return np.argsort(scores)[(-k):]
+		scores = np.multiply((1+y_pred), y_std).flatten()
+		all_items = np.arange(available_items_ids.shape[0])
+		return all_items[available_items_ids][np.argsort(scores)[(-k):]]
 		
 	def update(self, reward, div_intra, div_inter):
 		pass # no update post fit
@@ -109,6 +131,9 @@ class LogisticUCBDiversity(LogisticUCB):
 			action = item_actions[i].reshape(1,-1)
 			context = user_contexts[i]
 			available_items_ids = get_available_actions(context)
+			if (available_items_ids.sum()==0):
+				#print(f"All items are explored for user {context_array2int(context, 1)}")
+				available_items_ids = np.ones(available_items_ids.shape, dtype=int)
 			context_embeddings = self.item_embeddings.values[~available_items_ids,:]
 			if (context_embeddings.shape[0]==0):
 				div = 1.0
@@ -117,4 +142,6 @@ class LogisticUCBDiversity(LogisticUCB):
 				div = np.abs(np.linalg.det(self.kernel(embs)))
 			y_user0div.append(div)
 		y_user0 = np.multiply( y_user0, np.array(y_user0div) )
-		self.gp.fit(X_user0, y_user0)
+		with warnings.catch_warnings():
+			warnings.filterwarnings("ignore", category=ConvergenceWarning)
+			self.gp.fit(X_user0, y_user0)

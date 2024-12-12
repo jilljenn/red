@@ -1,24 +1,19 @@
-nusers: 10       ## number of users
+nusers: 5        ## number of users
 nitems: 10       ## number of items
 nratings: 1000   ## number of ratings
-ncategories: 5   ## number of item categories
-data_type: "movielens"
+ncategories: 2   ## number of item categories
+data_type: "synthetic"
 policies: ["LogisticUCB","LogisticUCBDiversity"]
+emb_dim: 2       ## item embedding size
+emb_dim_user: 2  ## user embeddings size
 
-emb_dim: 10      ## item embedding size
-emb_dim_user: 10 ## user embeddings size
-k: 3             ## number of items to sample at each time
-seed: 1234       ## random seed
-horizon: 10000   ## recommendation rounds
-verbose: false
-prob_new_user: 0.
+k: 2             ## number of items to sample at each time
+seed: 1111       ## random seed
+horizon: 10      ## recommendation rounds
+p_visit: 0.9
 
-S: 1.            ## norm on item embeddings
-Sp: 1.           ## norm on model parameter
-m: 1             ## feedback bound
-sigma: 0.5       ## variance in reward noise
-
-ndec: 3          ## number of decimals to print out
-niters: 1        ## number of iterations
+niters: 2        ## number of iterations
 njobs: 1         ## number of parallel jobs
 gamma: 1.0       ## discounting factor for the time
+prob_new_user: 0.
+verbose: false
