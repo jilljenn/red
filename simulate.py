@@ -2,7 +2,7 @@
 
 import numpy as np
 from tqdm import tqdm
-from tools import context_array2int, context_int2array, get_available_actions
+from tools import *
 
 def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=0.1, gamma=1., verbose=False, aggreg="sum"):
 	'''
@@ -32,19 +32,12 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 	Returns
 	--
 	results : dictionary of arrays of shape (horizon, 4)
-		for each policy, reward values, reward sum, diversity inside and across batches of k recommended items across rounds
+		for each policy, reward regret, aggregated feedback, intrabatch diversity regret, interbatch diversity regret at each time t
 	'''
 	results = {policy.name: np.zeros((horizon, 4)) for policy in trained_policies}
 	#results.update({"oracle reward": np.zeros((horizon, 3)), "oracle diversity": np.zeros((horizon, 3))})
 	
-	if (aggreg=="sum"):
-		aggreg_func = np.sum
-	elif (aggreg=="mean"):
-		aggreg_func = np.mean
-	elif (aggreg=="max"):
-		aggreg_funct = np.max
-	else:
-		raise ValueError(f"Aggregation method {aggreg} not implemented")
+	aggreg_func = choose_aggregation(aggreg)
 	
 	for t in tqdm(range(1,horizon+1), leave=False):
 	
@@ -107,6 +100,59 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			print("")
 		
 	return results
+	
+def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=False, aggreg="sum"):
+	'''
+	Simulate a trajectory from an initial user context
+	
+	Parameters
+	--
+	k : int
+		the number of recommended items
+	horizon : int
+		the number of recommendation rounds
+	policy : Policy class
+		the policy trained on prior ratings
+	reward : Reward class
+		the environment
+	context : array of shape (n_ratings, 1)
+		the prior user context (array format)
+	gamma : float
+		the time discount factor
+	verbose : bool
+		whether to print info
+		
+	Returns
+	--
+	results : arrays of shape (horizon, 2*K)
+		the K recommended item identifiers, the K feedback values at time t
+	contexts : list of arrays of shape (N, 1)
+		the list of contexts at each round
+	'''
+	results = np.zeros((horizon, 2*k), dtype=int) 
+	contexts = [context.copy()]
+	aggreg_func = choose_aggregation(aggreg)
+	
+	for t in tqdm(range(1,horizon+1), leave=False):
+	
+		rt_ids = policy.predict(context, k, only_available=True)
+		if (rt_ids is None):
+			results = results[:(t-1),:]
+			return results
+		results[t-1,:k] = rt_ids 
+		rt = reward.item_embeddings[rt_ids,:]
+		yt = reward.get_reward(context, rt)
+		results[t-1,k:] = yt
+		rrt = aggreg_func(yt)
+		
+		## update context
+		cc = context.ravel().copy()
+		context[rt_ids,:] += yt.reshape(-1,1)
+		contexts.append(context.copy())
+		if (verbose):# or (t%int(horizon//10)==0)):
+			print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {pretty_print_context(cc)} -> {pretty_print_context(context.ravel())} (aggregated reward={np.round(rrt,3)})")
+
+	return results, contexts
 	
 if __name__=="__main__":
 	pass

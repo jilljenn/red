@@ -1,19 +1,21 @@
-nusers: 5        ## number of users
-nitems: 10       ## number of items
+nusers: 10       ## number of users
+nitems: 2000     ## number of items
 nratings: 1000   ## number of ratings
-ncategories: 2   ## number of item categories
+ncategories: 10  ## number of item categories
 data_type: "synthetic"
 policies: ["LogisticUCB","LogisticUCBDiversity"]
-emb_dim: 2       ## item embedding size
+emb_dim: 100     ## item embedding size
 emb_dim_user: 2  ## user embeddings size
 
-k: 2             ## number of items to sample at each time
+k: 10            ## number of items to sample at each time
 seed: 1111       ## random seed
-horizon: 10      ## recommendation rounds
+horizon: 100     ## recommendation rounds
 p_visit: 0.9
 
-niters: 2        ## number of iterations
+niters: 50       ## number of iterations
 njobs: 1         ## number of parallel jobs
 gamma: 1.0       ## discounting factor for the time
 prob_new_user: 0.
 verbose: false
+
+horizon_traj: 4

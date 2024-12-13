@@ -6,3 +6,4 @@ tqdm
 pyyaml
 dppy
 torchmetrics
+umap-learn

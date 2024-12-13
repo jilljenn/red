@@ -31,7 +31,7 @@ class Policy(object):
 	def fit(self, ratings):
 		raise NotImplemented
 		
-	def predict(context, k):
+	def predict(context, k, only_available=False):
 		raise NotImplemented
 		
 	def update(self, reward, div_intra, div_inter):
@@ -95,11 +95,13 @@ class LogisticUCB(Policy):
 			warnings.filterwarnings("ignore", category=ConvergenceWarning)
 			self.gp.fit(X_user0, y_user0)
 			
-	def predict(self, context, k):
+	def predict(self, context, k, only_available=False):
 		available_items_ids = get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
+			if (only_available):
+				return None
 		items = self.item_embeddings.values[available_items_ids,:]
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = np.concatenate((items, contexts), axis=1).astype(int).astype(float)

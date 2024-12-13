@@ -14,6 +14,8 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     #torch.use_deterministic_algorithms(True)
     
+pretty_print_context = lambda c : ''.join(list(map(lambda x : str(int(x)),c)))
+    
 def get_context_from_rating(rating):
 	return rating[4]
 	
@@ -39,6 +41,17 @@ def get_available_actions(context):
 	'''
 	action_ids = (context==0).ravel()
 	return action_ids
+	
+def choose_aggregation(aggreg):
+	if (aggreg=="sum"):
+		aggreg_func = np.sum
+	elif (aggreg=="mean"):
+		aggreg_func = np.mean
+	elif (aggreg=="max"):
+		aggreg_func = np.max
+	else:
+		raise ValueError(f"Aggregation method {aggreg} not implemented")
+	return aggreg_func
 
 def context_array2int(arr, m=1):
 	'''

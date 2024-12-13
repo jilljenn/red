@@ -12,7 +12,7 @@ from tqdm import trange
 
 from data import synthetic, movielens
 from policies import *
-from simulate import simulate
+from simulate import simulate, simulate_trajectory
 from tools import *
 
 with open('config.yml', 'r') as f:
@@ -35,9 +35,9 @@ pretty_ratings = pd.DataFrame(ratings, columns=["user","item","#recommended","ca
 print(pretty_ratings)
 print(pretty_ratings["reward"].value_counts())
 
+## 2. Fit a policy on previous interactions and simulate on prior contexts
 def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma=gamma, verbose=False, random_seed=13234):
 	seed_everything(int(random_seed))
-	## 2. Fit a policy on previous interactions
 	trained_policies = []
 	for policy_name in policies:
 		policy = eval(policy_name)(info, random_state=random_seed)
@@ -49,9 +49,7 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 			rt = reward.item_embeddings[rt_ids,:]
 			yt = reward.get_reward(user_context, rt)
 			# ratings[-1,3] = context_array2int(user_context, reward.m)}
-			print(f"{policy_name}: User with initial context {get_context_from_rating(ratings[-1])} ({user_context.ravel()}) recommended items {rt_ids} with scores {np.mean(yt)}")
-
-		## 3. Simulate the results from the policy	
+			print(f"{policy_name}: User with initial context {get_context_from_rating(ratings[-1])} ({user_context.ravel()}) recommended items {rt_ids} with scores {np.mean(yt)}")	
 		trained_policies += [policy]
 		
 	user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), nitems) for i in range(ratings.shape[0])])
@@ -65,8 +63,62 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 	#print(f"Diversity oracle\n\tRegret Reward={np.sum(results['oracle diversity'][:,0])}\tDiversity (intrabatch)={np.sum(results['oracle diversity'][:,1])}\tDiversity (interbatch)={np.sum(results['oracle diversity'][:,2])}\tTime={runtime} sec.\n\n")
 	return results
 	
+blank_context = np.zeros((nitems, 1))
+def single_trajectory(policy_name, info, ratings, k, horizon, reward, gamma=gamma, context=None, verbose=False, random_seed=13234):
+	seed_everything(int(random_seed))
+	if (context is None):
+		context = blank_context.copy()
+
+	policy = eval(policy_name)(info, random_state=random_seed)
+	policy.fit(ratings)
+	
+	stime = time()
+	results = simulate_trajectory(k, horizon, policy, reward, context=context, gamma=gamma, verbose=verbose)
+	runtime = time()-stime
+	return results
+	
 assert njobs==1
 
+## 3. User scatter plots of UMAPs of item embeddings according to user feedback (non selected, selected, selected and liked, selected and disliked)
+fontsize=15
+
+## Generate a trajectory
+results, contexts = single_trajectory(policies[0], info, ratings, k, horizon_traj, reward, verbose=verbose)
+
+item_embs = info["item_embeddings"].values
+item_labels = {t: 0.5*np.ones(item_embs.shape[0]) for t in range(horizon_traj)}
+for t in range(horizon_traj):
+	item_lbs = item_labels[t]
+	item_lbs[results[t,:k].ravel()] = results[t,k:].ravel()
+	item_labels[t] = item_lbs
+
+## Plot UMAP
+import umap
+dimred_args = dict(n_neighbors=3, min_dist=0.5, metric="euclidean")
+with np.errstate(invalid="ignore"): # for NaN or 0 variance matrices
+	umap_model = umap.UMAP(**dimred_args)
+	embeddings = umap_model.fit_transform(item_embs)
+	
+fig, axes = plt.subplots(nrows=1, ncols=horizon_traj, figsize=(6.5*horizon_traj,6))
+labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected"}
+labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b"}
+for t in range(horizon_traj):
+	for label in labels:
+		embs = embeddings[item_labels[t]==label,:]
+		if (embs.shape[0]==0):
+			continue
+		axes[t].scatter(embs[:,0], embs[:,1], s=200, c=labels_colors[label], marker=".", alpha=0.05 if (label == 0.5) else 0.8, label=labels[label])
+	axes[t].set_title(f"Round {t+1}: context {pretty_print_context(contexts[t])[:10]}"+("..." if (len(contexts[t])>10) else ""), fontsize=fontsize)
+	if (t==0):
+		axes[t].set_ylabel("UMAP C2", fontsize=fontsize)
+	axes[t].set_xlabel("UMAP C1", fontsize=fontsize)
+	axes[t].set_xticklabels(axes[t].get_xticklabels(), fontsize=fontsize)
+	axes[t].set_yticklabels(axes[t].get_yticklabels(), fontsize=fontsize)
+	if (t==0):
+		axes[t].legend(fontsize=fontsize)
+plt.savefig("figure2.png", bbox_inches="tight")
+
+## 4. Simulate the results from the policy
 seeds = np.random.choice(range(int(1e8)), size=niters)
 if ((niters==1) or (njobs==1)):
 	results_list = [single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma, verbose, seeds[iterr]) for iterr in trange(niters)]
@@ -76,10 +128,10 @@ else:
 #print(results_list)
 
 ## 3. Plots for reward and diversity
+fontsize=30
 fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(40,10))
 policies_names = policies#+["oracle reward", "oracle diversity"]
 colors = {"LogisticUCB": "b", "LogisticUCBDiversity": "c"}#, "oracle reward": "k", "oracle diversity": "g"}
-fontsize=30
 
 handles = []
 for policy_name in policies_names:
@@ -98,7 +150,7 @@ for policy_name in policies_names:
 		axes[i].fill_between(x.ravel(), average.ravel() - std.ravel(), average.ravel() + std.ravel(), alpha=0.2, color=colors[policy_name])
 		axes[i].set_xticklabels(axes[i].get_xticklabels(), fontsize=fontsize)
 		axes[i].set_yticklabels(axes[i].get_yticklabels(), fontsize=fontsize)
-		axes[i].set_title({0: "Reward regret", 1: "Reward sum", 2: "Diversity intra-batch regret", 3: "Diversity inter-batch regret"}[i], fontsize=fontsize)
+		axes[i].set_title({0: "Reward regret", 1: "Reward aggregated", 2: "Diversity intra-batch regret", 3: "Diversity inter-batch regret"}[i], fontsize=fontsize)
 		axes[i].set_xlabel("Horizon", fontsize=fontsize)
 		axes[i].set_ylabel("", fontsize=fontsize)
 handles, labels = axes[0].get_legend_handles_labels()
@@ -107,4 +159,3 @@ axes[0].legend(handles, labels, fontsize=fontsize)
 plt.savefig("figure1.png", bbox_inches="tight")
 plt.close()
 
-## TODO 4. UMAP scatter plot of item embeddings and color according to user feedback / visit, per user
