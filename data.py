@@ -366,20 +366,9 @@ from torchmetrics import Accuracy, R2Score
 from sklearn.metrics.pairwise import cosine_similarity
 
 class MovieLensReward(SyntheticReward):
-	def __init__(self, item_embeddings, add_params=dict(theta=None, sigma=0.01)):
+	def __init__(self, item_embeddings, add_params=dict(theta=None, item_categories=None, p_visit=0.9)):
 		self.item_categories = add_params["item_categories"]
-		super().__init__(Theta, item_embeddings, sigma=sigma, m=1.)
-		
-	def get_reward(self, context, action_embeddings=None):
-		## Reward if visited and booked: +1
-		##        if non visited: 0
-		##        if visited and not booked: -1
-		if (action_embeddings is None):
-			action_embeddings = self.item_embeddings
-		means = self.get_means(context, action_embeddings)
-		probas = 1/(1+np.exp(-means))
-		reward = [np.random.choice(range(2), p=[1-p, p])*(-1)**np.random.choice(range(2), p=[p, 1-p]) for p in probas.flatten().tolist()]
-		return reward
+		super().__init__(item_embeddings, add_params=add_params)
 		
 	def get_diversity(self, action_embeddings_positive=None, context=None, action_ids=None):
 		## Diversity if visited, booked, new (category): +1
@@ -521,30 +510,24 @@ def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=30, batch_siz
 	new_item_embeddings = network.layers(torch.Tensor(item_embeddings.values)).detach().numpy()
 	return Theta, pd.DataFrame(new_item_embeddings, index=item_embeddings.index, columns=range(new_item_embeddings.shape[1]))
 		
-def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, S=1., Sp=1., sigma=1.):
+def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, m=1):
 	'''
 	Parameters
 	----------
 	nusers : int
-		number of users
+		the number of users
 	nitems : int
-		number of items
+		the number of items
 	nratings : int
-		number of ratings user-item to generate
+		the number of ratings user-item to generate
 	ncategories : int
-		number of (non necessarily distinct) item categories to identify
+		the number of (non necessarily distinct) item categories to identify
 	emb_dim : int
-		number of dimensions for item embeddings
+		the number of dimensions for item embeddings
 	emb_dim_user : int
-		number of dimensions for user embeddings
-	S : float
-		maximum norm of item embeddings
-	Sp : float
-		maximum norm of Theta parameter
+		the number of dimensions for user embeddings
 	m : int
-		maximum feedback value in absolute value
-	sigma : float
-		variance of the subgaussian reward noise
+		the maximum feedback value in absolute value
 		
 	Returns
 	-------
@@ -553,13 +536,13 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		the item categories in binary, the user context in 2m binary integers, 
 		the (integer) reward
 	item_embeddings : DataFrame of shape (nitems, emb_dim)
-		item embeddings
+		the item embeddings
 	user_embeddings : DataFrame of shape (nusers, emb_dim)
-		user embeddings
+		the user embeddings
 	item_categories : DataFrame of (nitems, ncategories)
-		category annotations for each item
+		the category annotations for each item
 	Phi : DataFrame of (ncategories, emb_dim)
-		centroids for each category of items
+		the centroids for each category of items
 	reward : class Reward
 		encodes the "true" reward for the problem
 	'''
@@ -642,9 +625,9 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 	#ratings[(ratings!=0)&(ratings>=threshold)] = 1
 	## Filter
 	print("Items")
-	print(item_embeddings.shape == (nitems, emb_dim))
+	print(items.shape == (nitems, emb_dim))
 	print("Users")
-	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print(users.shape == (nusers, emb_dim_user))
 	print("Categories")
 	print(item_categories.shape == (nitems, ncategories))
 	print("Phi")
@@ -665,9 +648,9 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx]
 	print("Items")
-	print(item_embeddings.shape == (nitems, emb_dim))
+	print(items.shape == (nitems, emb_dim))
 	print("Users")
-	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print(users.shape == (nusers, emb_dim_user))
 	print("Categories")
 	print(item_categories.shape == (nitems, ncategories))
 	print("Phi")
@@ -684,9 +667,9 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx] 
 	print("Items")
-	print(item_embeddings.shape == (nitems, emb_dim))
+	print(items.shape == (nitems, emb_dim))
 	print("Users")
-	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print(users.shape == (nusers, emb_dim_user))
 	print("Categories")
 	print(item_categories.shape == (nitems, ncategories))
 	print("Phi")
@@ -703,9 +686,9 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx]
 	print("Items")
-	print(item_embeddings.shape == (nitems, emb_dim))
+	print(items.shape == (nitems, emb_dim))
 	print("Users")
-	print(user_embeddings.shape == (nusers, emb_dim_user))
+	print(users.shape == (nusers, emb_dim_user))
 	print("Categories")
 	print(item_categories.shape == (nitems, ncategories))
 	print("Phi")
@@ -744,7 +727,7 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 	Theta, item_embeddings = learn_from_ratings(ratings_[:1000,:], items, emb_dim)
 	emb_dim = item_embeddings.shape[1]
 	reward = SyntheticReward(Theta, item_embeddings, sigma=sigma, m=threshold)
-	return ratings_, {"item_embeddings": item_embeddings, "user_embeddings": users, "item_categories": item_categories, "category_embeddings": Phi}, reward
+	return ratings_, {"item_embeddings": item_embeddings, "user_embeddings": users, "item_categories": item_categories, "Phi": Phi}, reward
 	
 if __name__=="__main__":
 	nusers=nitems=10
@@ -753,13 +736,13 @@ if __name__=="__main__":
 	emb_dim=512
 	emb_dim_user=11
 	print("_"*27)
-	if (True):
+	if (False):
 		print("SYNTHETIC")
-		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, S=1., Sp=1., m=3, sigma=1., loc=0, scale=1)
+		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, loc=0, scale=1)
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
-		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "category_embeddings"]]
+		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "Phi"]]
 		print("Items")
 		print(item_embeddings.shape == (nitems, emb_dim))
 		print("Users")
@@ -774,13 +757,13 @@ if __name__=="__main__":
 		print(reward.get_reward(context, action_emb))
 		print(reward.get_means(context, action_emb))
 		print("_"*27)
-	if (False): ## TODO retest Movielens
+	if (True): ## TODO retest Movielens
 		print("MOVIELENS")
 		ratings_, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=8) 
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
-		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "category_embeddings"]]
+		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "Phi"]]
 		print("Items")
 		print(item_embeddings.shape == (nitems, emb_dim))
 		print("Users")

@@ -83,40 +83,41 @@ assert njobs==1
 fontsize=15
 
 ## Generate a trajectory
-results, contexts = single_trajectory(policies[0], info, ratings, k, horizon_traj, reward, verbose=verbose)
-
 item_embs = info["item_embeddings"].values
-item_labels = {t: 0.5*np.ones(item_embs.shape[0]) for t in range(horizon_traj)}
-for t in range(horizon_traj):
-	item_lbs = item_labels[t]
-	item_lbs[results[t,:k].ravel()] = results[t,k:].ravel()
-	item_labels[t] = item_lbs
-
 ## Plot UMAP
 import umap
 dimred_args = dict(n_neighbors=3, min_dist=0.5, metric="euclidean")
 with np.errstate(invalid="ignore"): # for NaN or 0 variance matrices
 	umap_model = umap.UMAP(**dimred_args)
 	embeddings = umap_model.fit_transform(item_embs)
-	
-fig, axes = plt.subplots(nrows=1, ncols=horizon_traj, figsize=(6.5*horizon_traj,6))
-labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected"}
-labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b"}
-for t in range(horizon_traj):
-	for label in labels:
-		embs = embeddings[item_labels[t]==label,:]
-		if (embs.shape[0]==0):
-			continue
-		axes[t].scatter(embs[:,0], embs[:,1], s=200, c=labels_colors[label], marker=".", alpha=0.05 if (label == 0.5) else 0.8, label=labels[label])
-	axes[t].set_title(f"Round {t+1}: context {pretty_print_context(contexts[t])[:10]}"+("..." if (len(contexts[t])>10) else ""), fontsize=fontsize)
-	if (t==0):
-		axes[t].set_ylabel("UMAP C2", fontsize=fontsize)
-	axes[t].set_xlabel("UMAP C1", fontsize=fontsize)
-	axes[t].set_xticklabels(axes[t].get_xticklabels(), fontsize=fontsize)
-	axes[t].set_yticklabels(axes[t].get_yticklabels(), fontsize=fontsize)
-	if (t==0):
-		axes[t].legend(fontsize=fontsize)
-plt.savefig("figure2.png", bbox_inches="tight")
+
+for policy in policies:
+	results, contexts = single_trajectory(policy, info, ratings, k, horizon_traj, reward, verbose=verbose)
+
+	item_labels = {t: 0.5*np.ones(item_embs.shape[0]) for t in range(horizon_traj)}
+	for t in range(horizon_traj):
+		item_lbs = item_labels[t]
+		item_lbs[results[t,:k].ravel()] = results[t,k:].ravel()
+		item_labels[t] = item_lbs
+		
+	fig, axes = plt.subplots(nrows=1, ncols=horizon_traj, figsize=(6.5*horizon_traj,6))
+	labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected"}
+	labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b"}
+	for t in range(horizon_traj):
+		for label in labels:
+			embs = embeddings[item_labels[t]==label,:]
+			if (embs.shape[0]==0):
+				continue
+			axes[t].scatter(embs[:,0], embs[:,1], s=200, c=labels_colors[label], marker=".", alpha=0.05 if (label == 0.5) else 0.8, label=labels[label])
+		axes[t].set_title(f"Round {t+1}: context {pretty_print_context(contexts[t])[:10]}"+("..." if (len(contexts[t])>10) else ""), fontsize=fontsize)
+		if (t==0):
+			axes[t].set_ylabel("UMAP C2", fontsize=fontsize)
+		axes[t].set_xlabel("UMAP C1", fontsize=fontsize)
+		axes[t].set_xticklabels(axes[t].get_xticklabels(), fontsize=fontsize)
+		axes[t].set_yticklabels(axes[t].get_yticklabels(), fontsize=fontsize)
+		if (t==0):
+			axes[t].legend(fontsize=fontsize)
+	plt.savefig(f"figure2_{policy}.png", bbox_inches="tight")
 
 ## 4. Simulate the results from the policy
 seeds = np.random.choice(range(int(1e8)), size=niters)
@@ -130,8 +131,18 @@ else:
 ## 3. Plots for reward and diversity
 fontsize=30
 fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(40,10))
-policies_names = policies#+["oracle reward", "oracle diversity"]
-colors = {"LogisticUCB": "b", "LogisticUCBDiversity": "c"}#, "oracle reward": "k", "oracle diversity": "g"}
+policies_names = policies
+colors = {"LogisticUCB": "gray", "LogisticUCBDiversity": "silver", "CustomGreedy": "green", "CustomBruteForce": "firebrick", "CustomDPP": "steelblue", "CustomSampling": "rebeccapurple"}
+
+#https://www.mikulskibartosz.name/wilson-score-in-python-example/
+def wilson(p, n, z = 1.96): # CI at 95%
+	denominator = 1 + z**2/n
+	centre_adjusted_probability = p + z*z / (2*n)
+	adjusted_standard_deviation = np.sqrt((p*(1 - p) + z*z / (4*n)) / n)
+
+	lower_bound = (centre_adjusted_probability - z*adjusted_standard_deviation) / denominator
+	upper_bound = (centre_adjusted_probability + z*adjusted_standard_deviation) / denominator
+	return (lower_bound, upper_bound)
 
 handles = []
 for policy_name in policies_names:
@@ -147,7 +158,12 @@ for policy_name in policies_names:
 		x = np.array(range(horizon))
 		h = axes[i].plot(x.ravel(), average.ravel(), label=policy_name, color=colors[policy_name])
 		handles.append(h)
-		axes[i].fill_between(x.ravel(), average.ravel() - std.ravel(), average.ravel() + std.ravel(), alpha=0.2, color=colors[policy_name])
+		nsim = len(results_list)
+		#LB_CI = np.array([float(wilson(m, nsim)[0]) for m in average.flatten().tolist()])
+		#UB_CI = np.array([float(wilson(m, nsim)[1]) for m in average.flatten().tolist()])
+		LB_CI = np.maximum(average.ravel() - std.ravel(), 0)
+		UB_CI = average.ravel() + std.ravel()
+		axes[i].fill_between(x.ravel(), LB_CI, UB_CI, alpha=0.2, color=colors[policy_name])
 		axes[i].set_xticklabels(axes[i].get_xticklabels(), fontsize=fontsize)
 		axes[i].set_yticklabels(axes[i].get_yticklabels(), fontsize=fontsize)
 		axes[i].set_title({0: "Reward regret", 1: "Reward aggregated", 2: "Diversity intra-batch regret", 3: "Diversity inter-batch regret"}[i], fontsize=fontsize)

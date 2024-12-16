@@ -89,7 +89,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			rrt = aggreg_func(yt)
 			dia = aggreg_func(div_intra)
 			die = aggreg_func(div_inter)
-			policy.update(rrt, dia, die)
+			policy.update(context, rt, yt, div_intra, div_inter)
 			reg_reward = aggreg_func(reward.get_means(context, rt))
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
