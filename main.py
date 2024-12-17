@@ -161,7 +161,9 @@ for policy_name in policies_names:
 		nsim = len(results_list)
 		#LB_CI = np.array([float(wilson(m, nsim)[0]) for m in average.flatten().tolist()])
 		#UB_CI = np.array([float(wilson(m, nsim)[1]) for m in average.flatten().tolist()])
-		LB_CI = np.maximum(average.ravel() - std.ravel(), 0)
+		LB_CI = average.ravel() - std.ravel()
+		if (i != 1):
+			LB_CI = np.maximum(LB_CI, 0)
 		UB_CI = average.ravel() + std.ravel()
 		axes[i].fill_between(x.ravel(), LB_CI, UB_CI, alpha=0.2, color=colors[policy_name])
 		axes[i].set_xticklabels(axes[i].get_xticklabels(), fontsize=fontsize)
