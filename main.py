@@ -9,6 +9,7 @@ import yaml
 from joblib import Parallel, delayed, parallel_backend
 from multiprocessing import cpu_count
 from tqdm import trange
+import os
 
 from data import synthetic, movielens
 from policies import *
@@ -27,7 +28,13 @@ seed_everything(seed)
 if (data_type=="synthetic"):
 	ratings, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit)
 elif (data_type=="movielens"):
-	ratings, info, reward = movielens(nusers=10, nitems=50, nratings=None, ncategories=None, emb_dim=emb_dim) 
+	if (not os.path.exists("movielens_instance.pck")):
+		ratings, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=emb_dim, p_visit=p_visit, savename="movielens_instance.pck") 
+	else:
+		with open("movielens_instance.pck", "rb") as f:
+			di = pickle.load(f)
+		ratings, info, theta = [di[n] for n in ["ratings", "info", "theta"]]
+		reward = SyntheticReward(info["item_embeddings"], add_params=dict(theta=theta, item_categories=info["item_categories"], p_visit=p_visit))
 else:
 	raise ValueError(f"{data_type} is not implemented.")
 	
@@ -132,7 +139,7 @@ else:
 fontsize=30
 fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(40,10))
 policies_names = policies
-colors = {"LogisticUCB": "gray", "LogisticUCBDiversity": "silver", "CustomGreedy": "green", "CustomBruteForce": "firebrick", "CustomDPP": "steelblue", "CustomSampling": "rebeccapurple"}
+colors = {"LinUCB": "gray", "LinUCBDiversity": "pink", "CustomGreedy": "green", "CustomBruteForce": "firebrick", "CustomDPP": "steelblue", "CustomSampling": "rebeccapurple"}
 
 #https://www.mikulskibartosz.name/wilson-score-in-python-example/
 def wilson(p, n, z = 1.96): # CI at 95%

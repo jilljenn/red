@@ -66,17 +66,24 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
 		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0]) ## true
-		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])                  ## true
 		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids) ## to get positive regret
-		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret
-		best_diversity_intra = aggreg_func(div_intra)
 		best_diversity_inter = aggreg_func(div_inter)
-		r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
 		#res = results["oracle diversity"]
 		#res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
 		#results.update({"oracle diversity": res})
 		if (verbose):# or (t%int(horizon//10)==0)):
-			print(f"At t={t}, Diversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
+			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
+			print(f"At t={t}, InterDiversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
+		
+		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func, intra=True)
+		rt = reward.item_embeddings[rt_ids,:]
+		means = reward.get_means(context, rt)	
+		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])                  ## true
+		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret
+		best_diversity_intra = aggreg_func(div_intra)
+		if (verbose):# or (t%int(horizon//10)==0)):
+			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
+			print(f"At t={t}, IntraDiversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
 		
 		for policy in trained_policies:
 			rt_ids = policy.predict(context, k)
@@ -93,6 +100,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			reg_reward = aggreg_func(reward.get_means(context, rt))
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
+			print((policy.name, "theta", np.linalg.norm(reward.theta - policy.theta)))
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context.ravel()} (r={np.round(rrt,3)} (reward={np.round(reg_reward,3)}), dintra={np.round(dia,3)}, dinter={np.round(die,3)})")
 				
@@ -135,7 +143,7 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 	
 	for t in tqdm(range(1,horizon+1), leave=False):
 	
-		rt_ids = policy.predict(context, k, only_available=True)
+		rt_ids = policy.predict(context, k, only_available=False)#True)
 		if (rt_ids is None):
 			results = results[:(t-1),:]
 			return results

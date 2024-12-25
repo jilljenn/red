@@ -8,10 +8,15 @@ import os
 import pandas as pd
 from scipy.special import expit
 from sklearn.metrics.pairwise import linear_kernel, rbf_kernel
+import statistics 
+import matplotlib.pyplot as plt
+import pickle
 
 from tools import *
 
-## NOTATION
+##############
+## NOTATION ##
+##############
 # N : #items
 # K : #recommendations
 # d : item embedding dimension
@@ -95,7 +100,7 @@ class Reward(object):
 		'''
 		raise NotImplemented
 		
-	def get_oracle_diversity(self, context, K, aggreg_func=None):
+	def get_oracle_diversity(self, context, K, aggreg_func=None, intra=False):
 		'''
 		Obtains the optimal selection for the input context
 		with respect to the diversity score by greedily adding
@@ -104,12 +109,15 @@ class Reward(object):
 		
 		---
 		Parameters
-		context : array of shape (N, 1)
+		context : array of shape (N, 1) or None
 			the feedback observed in the past
 		K : int
 			the number of actions to select
 		aggreg_func : Python function
 			the aggregation function for diversity scores
+		intra : bool
+			computes the intrabatch diversity instead of 
+			interbatch diversity if set to True
 			
 		---
 		Returns
@@ -117,7 +125,7 @@ class Reward(object):
 			the optimal diversity-wise selection for context
 		'''
 		assert aggreg_func is not None
-		available_items_ids = get_available_actions(context)
+		available_items_ids = np.zeros(context.shape).ravel() #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
@@ -125,7 +133,7 @@ class Reward(object):
 		pi = []
 		for k in range(K): ## build the oracle greedily as the function is submodular
 			vals = np.array([
-					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=context, action_ids=np.array(pi+[i])) ) 
+					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=None if (intra) else context, action_ids=np.array(pi+[i])) ) 
 					for i in range(available_items.shape[0]) if (i not in pi)
 				])
 			vals = vals.flatten().tolist()
@@ -156,7 +164,7 @@ class Reward(object):
 		pi : array of shape (K,)
 			the optimal reward-wise selection for context
 		'''
-		available_items_ids = get_available_actions(context)
+		available_items_ids = np.zeros(context.shape).ravel() #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
@@ -253,7 +261,7 @@ class SyntheticReward(Reward):
 		scores = compute_leverage_scores(action_categories)
 		if (context is None or context.sum()==0):
 			return scores
-		available_items_ids = get_available_actions(context)
+		available_items_ids = np.zeros(context.shape).ravel().astype(bool) #get_available_actions(context)
 		context_categories = self.item_categories[~available_items_ids,:]
 		#context_embeddings = self.item_embeddings[~available_items_ids,:]
 		embs = np.concatenate((action_categories, context_categories), axis=0)
@@ -343,7 +351,7 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 			rat = int(reward.get_reward(contexts[u], item_embeddings[i].reshape(1,-1)))
 		bin_context = context_array2int(contexts[u].flatten(), m)
 		bin_cats = "".join(list(map(lambda x : str(int(x)), item_categories[i])))
-		ratings[nrat] = [u, i, npulls[u,i], bin_cats, bin_context, rat]
+		ratings[nrat] = [u, i, int(npulls[u,i]), bin_cats, bin_context, rat]
 		## Update user context
 		contexts[u, i] = (npulls[u,i]*contexts[u, i]+rat)/(npulls[u,i]+1)
 		npulls[u,i] += 1
@@ -369,35 +377,12 @@ class MovieLensReward(SyntheticReward):
 	def __init__(self, item_embeddings, add_params=dict(theta=None, item_categories=None, p_visit=0.9)):
 		self.item_categories = add_params["item_categories"]
 		super().__init__(item_embeddings, add_params=add_params)
-		
-	def get_diversity(self, action_embeddings_positive=None, context=None, action_ids=None):
-		## Diversity if visited, booked, new (category): +1
-		##           otherwise: 0
-		if (action_ids is None):
-			action_ids = np.ones(self.item_categories.shape[0])
-		action_positive_categories = self.item_categories[action_ids, :]
-		div1 = 1-cosine_similarity(action_positive_categories)
-		np.fill_diag(div1, 0)
-		print(div1)
-		div1 = np.mean((np.sum(div1, axis=1)==0).astype(int))
-		if (context is None or context.sum()==0):
-			return np.abs(div1)
-		context_categories = self.item_categories[context, :]
-		embs = np.concatenate((context_categories, action_positive_categories), axis=0)
-		div2 = 1-cosine_similarity(embs)
-		np.fill_diag(div2, 0)
-		print(div2)
-		Nc = context_categories.shape[0]
-		div2 = np.mean((np.sum(div2[Nc:,:Nc], axis=1)==0).astype(int))
-		return div2
 
 class MLP(nn.Module):
-	def __init__(self, item_embeddings, n_features, mlp_depth=1, mlp_width = 256, last_layer_width = 8, dtype=torch.float, Sp=1., S=1.):
+	def __init__(self, item_embeddings, mlp_depth=2, mlp_width=128, last_layer_width=8, dtype=torch.float, Sp=1., S=1.):
 		"""
 		Parameters
 		----------
-		n_features : int
-		    Dimension of inputs.
 		mlp_depth : int
 		    Number of hidden layers in the MLP.
 		mlp_width : int
@@ -411,31 +396,38 @@ class MLP(nn.Module):
 		self.N = self.item_embeddings.shape[0]
 		self.nf = self.item_embeddings.shape[1]
 		self.layers = nn.Sequential(
-		    *[nn.Linear(n_features, mlp_width, dtype=dtype), nn.ReLU()],
+		    *[nn.Linear(self.nf, 32, dtype=dtype), nn.ReLU()],
+		    *[nn.Linear(32, 64, dtype=dtype), nn.ReLU()],
+		    *[nn.Linear(64, mlp_width, dtype=dtype), nn.ReLU()],
 		    *[nn.Linear(mlp_width, mlp_width, dtype=dtype), nn.ReLU()]*mlp_depth,
-		    *[nn.Linear(mlp_width, last_layer_width, dtype=dtype)]
+		    *[nn.Linear(mlp_width, 64, dtype=dtype), nn.ReLU()],
+		    *[nn.Linear(64, 32, dtype=dtype), nn.ReLU()],
+		    *[nn.Linear(32, 16, dtype=dtype), nn.ReLU()],
+		    *[nn.Linear(16, last_layer_width, dtype=dtype)]
 		)
 		self.Sp = Sp
 		self.S = S
-		self.Theta = torch.nn.parameter.Parameter(data=torch.Tensor(np.random.normal(0,1,size=(last_layer_width, 1))), requires_grad=True)
+		self.Theta = torch.nn.parameter.Parameter(data=torch.Tensor(np.random.normal(0,1,size=(self.N+last_layer_width, 1))), requires_grad=True)
 		with torch.no_grad():
 			self.Theta /= torch.norm(self.Theta)/Sp
 
 	def forward(self, inp):
+		## batch_size x N
 		contexts = inp[:,self.nf:]
+		## batch_size x F
 		x = inp[:,:self.nf]
-		all_actions = self.layers(self.item_embeddings)
+		## batch_size x d
 		action_embeddings = self.layers(x)
-		out = torch.zeros((x.shape[0], 1))
 		with torch.no_grad():
+			action_embeddings /= action_embeddings.norm()/self.S
+			## d x 1
 			self.Theta /= self.Theta.norm()/self.Sp
-		for i in range(x.shape[0]):
-			Xk = action_embeddings[i].repeat(self.item_embeddings.size(dim=0), 1)
-			dst = 1/(self.S**2*self.Sp) * torch.pow(all_actions-Xk, 2)
-			x1 = torch.matmul( contexts[i].reshape((1, -1)) , dst )
-			x2 = self.Theta.reshape(-1,1)
-			out[i] = torch.matmul( x1, x2 )
-		return out.squeeze()
+		## batch_size x (N+d)
+		all_actions = torch.cat((contexts, action_embeddings), axis=1)
+		## batch_size x (N+d)
+		Thetas = self.Theta.repeat(1,x.shape[0]).T
+		out = (all_actions * Thetas[None]).sum(dim=-1).squeeze()
+		return out
 		
 def get_optimizer_by_group(model, optim_hyperparams):
     wd = optim_hyperparams.pop('weight_decay')
@@ -453,71 +445,106 @@ def get_optimizer_by_group(model, optim_hyperparams):
         )
     return optimizer
 
-def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=30, batch_size=200, test_size=0.2, Sp=1., S=1., seed=1234):
+def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_size=1000, test_size=0.2, Sp=1., S=1., lr=0.01, seed=1234):
 	'''
 	See Appendix F.4 of Papini, Tirinzoni, Restelli, Lazaric and Pirotta (ICML'2021). 
 	Linearization: We train a neural network to regress from initial item embeddings to ratings by some of the users
 	Neural network: 2 hidden layers of size 256, ReLU activations, linear output layer of size 8
-	Feature extraction: for each item, we consider 
+	Feature extraction : last layer of the neural network
 	'''
 	seed_everything(seed)
-	network = MLP(item_embeddings, n_features=item_embeddings.shape[1], last_layer_width=emb_dim)
+	network = MLP(item_embeddings, last_layer_width=emb_dim)
+	#ratings_train, ratings_test = ratings_[train_id], ratings_[[i for i in range(ratings_.shape[0]) if (i not in train_id)]]
+	#N, nf = item_embeddings.shape
+	#X, y = np.zeros((ratings_.shape[0], N+nf)), np.zeros(ratings_.shape[0])
+	#for i in tqdm(range(ratings_.shape[0])):
+	#	context = context_int2array(get_context_from_rating(ratings_[i]), N).reshape(1,-1)
+	#	item = get_item_from_rating(ratings_[i])
+	#	x_i = item_embeddings.loc[item_embeddings.index[item]].values.reshape(1,-1)
+	#	cx_i = np.concatenate((context, x_i), axis=1)
+	#	X[i, :] = cx_i
+	#	y_i = get_rating_from_rating(ratings_[i])
+	#	y[i] = (y_i+1)/2
 	## Split ratings into 80% (training) and 20% (testing)
 	train_id = np.random.choice(range(ratings_.shape[0]), size=int((1-test_size)*ratings_.shape[0]))
-	train_idx = np.zeros(ratings_.shape[0], dtype=int)
-	train_idx[train_id] = 1
-	#ratings_train, ratings_test = ratings_[train_id], ratings_[[i for i in range(ratings_.shape[0]) if (i not in train_id)]]
-	N, nf = item_embeddings.shape
-	X, y = np.zeros((ratings_.shape[0], N+nf)), np.zeros(ratings_.shape[0])
-	for i in tqdm(range(ratings_.shape[0])):
-		context = context_int2array(get_context_from_rating(ratings_[i]), N).reshape(1,-1)
-		item = get_item_from_rating(ratings_[i])
-		x = item_embeddings.loc[item_embeddings.index[item]].values.reshape(1,-1)
-		reward = get_rating_from_rating(ratings_[i])
-		xx = np.concatenate((context, x), axis=1)
-		X[i, :] = xx
-		y[i] = reward
-	X_train, y_train = torch.Tensor(X[train_idx,:]), torch.Tensor(y[train_idx])
-	X_test, y_test = torch.Tensor(X[~train_idx,:]), torch.Tensor(y[~train_idx])
-	ds_train = TensorDataset(X_train, y_train)
-	ds_test = TensorDataset(X_test, y_test)
+	test_id = np.array([i for i in range(ratings_.shape[0]) if (i not in train_id)])
+	#train_idx = np.zeros(ratings_.shape[0], dtype=bool)
+	#test_idx = np.ones(ratings_.shape[0], dtype=bool)
+	#train_idx[train_id] = 1
+	#test_idx[train_id] = 0
+	#X_train, y_train = torch.Tensor(X[train_idx,:]), torch.Tensor(y[train_idx])
+	#X_test, y_test = torch.Tensor(X[~train_idx,:]), torch.Tensor(y[~train_idx])
+	#ds_train = TensorDataset(X_train, y_train)
+	#ds_test = TensorDataset(X_test, y_test)
+	ds_train = TensorDataset(torch.Tensor(train_id.reshape(-1,1)), torch.Tensor(train_id))
+	#ds_test = TensorDataset(test_id, test_id)
 	train_loader = DataLoader(ds_train, batch_size=batch_size, shuffle=True)
-	test_loader = DataLoader(ds_test, batch_size=batch_size)
+	def retrieve_instance(ids_list):
+		N, nf = item_embeddings.shape
+		X, y = np.zeros((len(ids_list), N+nf)), np.zeros(len(ids_list))
+		for ii, i in tqdm(enumerate(ids_list), leave=False):
+			context = context_int2array(get_context_from_rating(ratings_[i]), N).reshape(1,-1)
+			item = get_item_from_rating(ratings_[i])
+			x_i = item_embeddings.loc[item_embeddings.index[item]].values.reshape(1,-1)
+			cx_i = np.concatenate((context, x_i), axis=1)
+			y_i = get_rating_from_rating(ratings_[i])
+			X[ii,:] = cx_i
+			y[ii] = (y_i+1)/2
+		return torch.Tensor(X), torch.Tensor(y)
+	X_test, y_test = retrieve_instance(test_id)
+	#test_loader = DataLoader(ds_test, batch_size=batch_size)
 	## Training
-	criterion = nn.MSELoss()
-	opt = get_optimizer_by_group(network, {'weight_decay': 0.0, 'lr': 0.1})
+	criterion = nn.MSELoss(reduction="sum") 
+	opt = get_optimizer_by_group(network, {'weight_decay': 0.0, 'lr': lr})
+	old_loss, max_patience = float("inf"), 3
+	patience = max_patience
+	all_losses, all_testLoss, all_testR2 = [], [], []
 	for epoch in (pbar := tqdm(range(nepochs))):
+		train_loss_crit, n_tot = 0, 0
 		for bx, by in train_loader:
+			## Create data
+			X, y = retrieve_instance(by.numpy().ravel().astype(int))
 			opt.zero_grad(set_to_none=True)
-			preds = network(bx)
-			loss = criterion(preds, by.reshape(preds.size()))
+			loss = criterion(network(X), y) 
+			train_loss_crit += loss.item()
+			n_tot += by.size(0)
 			loss.backward(retain_graph=True)
-			opt.step()
 			with torch.no_grad():
-				network.Theta /= torch.norm(network.Theta)/Sp
-		y_preds_test = network(X_train)
-		y_preds = network(X_test)
-		test_loss = R2Score()
-		test_loss.update(y_preds_test, y_test)
-		test_loss = test_loss.compute()
-		train_loss = R2Score()
-		train_loss.update(y_preds, y_train)
-		train_loss = train_loss.compute()
-		pbar.set_description(f"Epoch {epoch+1}/{nepochs} - Train MSE {loss.item()} - Training loss R2={train_loss} - Testing loss R2={test_loss}")
-	print(("Final loss", train_loss, test_loss)) 
-	## Return coefficients + new (linear) embeddings
+				network.Theta /= network.Theta.norm()/Sp
+			opt.step()
+		train_loss_crit = train_loss_crit/float(n_tot)
+		all_losses.append(train_loss_crit)
+		test_loss = criterion(network(X_test), y_test)/X_test.shape[0]
+		all_testLoss.append(test_loss.item())
+		test_loss /= statistics.pvariance(y_test.numpy()) 
+		test_loss = 1 - test_loss
+		all_testR2.append(test_loss.item())
+		if ((train_loss_crit>old_loss) and (max_patience is not None)):
+			patience -= 1
+		elif (max_patience is not None):
+			patience = max_patience
+		pbar.set_description(f"Epoch {epoch+1}/{nepochs} - Train Loss {np.round(all_losses[-1],3)} - Test Loss={np.round(all_testLoss[-1],3)} - Test R2={np.round(all_testR2[-1],3)}")
+		if (patience == 0):
+			break
+		old_loss = train_loss_crit
+	## Plot
+	plt.plot(range(len(all_losses)), all_losses, "b-", label="train MSE")
+	plt.plot(range(len(all_testLoss)), all_testLoss, "g-", label="test MSE")
+	#plt.plot(range(len(all_testR2)), all_testR2, "r-", label="test R2")
+	#plt.ylim(-1, 1)
+	plt.legend()
+	plt.show()
+	## Return coefficients + new (linear) item embeddings
 	Theta = network.Theta.detach().numpy()
+	Theta /= np.linalg.norm(Theta)/Sp
 	new_item_embeddings = network.layers(torch.Tensor(item_embeddings.values)).detach().numpy()
+	new_item_embeddings /= np.linalg.norm(new_item_embeddings)/S
 	return Theta, pd.DataFrame(new_item_embeddings, index=item_embeddings.index, columns=range(new_item_embeddings.shape[1]))
 		
-def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, m=1):
+def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, p_visit=0.9, savename="movielens_instance.pck"):
 	'''
 	Parameters
 	----------
-	nusers : int
-		the number of users
-	nitems : int
-		the number of items
 	nratings : int
 		the number of ratings user-item to generate
 	ncategories : int
@@ -526,26 +553,33 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		the number of dimensions for item embeddings
 	emb_dim_user : int
 		the number of dimensions for user embeddings
-	m : int
-		the maximum feedback value in absolute value
+	p_visit : float
+		the probability of visiting a recommended item
+	savename : str
+		the file name to which the instance will be stored
 		
 	Returns
 	-------
-	ratings : array of shape (nratings, 5)
+	ratings : array of shape (L, 5)
 		each row comprises the user identifier, the item identifier, 
-		the item categories in binary, the user context in 2m binary integers, 
+		the number of times the user has seen the item,
+		the item categories in binary, the user context in 2*m binary integers, 
 		the (integer) reward
-	item_embeddings : DataFrame of shape (nitems, emb_dim)
-		the item embeddings
-	user_embeddings : DataFrame of shape (nusers, emb_dim)
-		the user embeddings
-	item_categories : DataFrame of (nitems, ncategories)
-		the category annotations for each item
-	Phi : DataFrame of (ncategories, emb_dim)
-		the centroids for each category of items
+	info : dict
+		contains the following entries
+		item_embeddings : array of shape (N, d)
+			the item embeddings
+		user_embeddings : array of shape (U, dp)
+			the user embeddings
+		item_categories : array of (N, C)
+			the category annotations for each item
+		Phi : array of (C, d)
+			the centroids for each category of items
 	reward : class Reward
-		encodes the "true" reward for the problem
+		the ground-truth reward for the problem
 	'''
+	nusers=None
+	nitems=None
 	## Create the MovieLens data set
 	if (not os.path.exists("ml-latest-small/")):
 		proc = Popen("wget -qO - https://files.grouplens.org/datasets/movielens/ml-latest-small.zip |  bsdtar -xvf -".split(" "))
@@ -561,11 +595,12 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		ncategories = len(all_genres)
 		item_categories = np.array([[ int(g in items.loc[i]["genres"].split("|")) for g in all_genres] for i in items.index])
 	### First example: Year + genre
-	if (emb_dim is None):
+	if (True):
 		items["Year"] = [x.split(")")[len(x.split(")"))-2**int(len(x.split(")"))>1)].split("(")[-1].split("–")[-1] if (len(x.split("("))>1) else "0" for x in items["title"]]
 		for genre in all_genres:
 			items[genre] = [int(genre in x) for x in items["genres"]]
 		items = items[["Year"]+all_genres]
+		#emb_dim = items.shape[1]
 	### Second example (sparsier): bag-of-words
 	else:
 		from sklearn.feature_extraction.text import TfidfVectorizer
@@ -619,20 +654,9 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 	col_idx, row_idx = [x for x in list(ratings.columns) if (x in users.index)], [x for x in list(ratings.index) if (x in items.index)]
 	users = users.loc[col_idx]
 	items = items.loc[row_idx]
+	item_categories = item_categories.loc[row_idx]
 	ratings = ratings.loc[row_idx][col_idx]
-	threshold = int(np.max(ratings.values)/2)+1
-	#ratings[(ratings!=0)&(ratings<threshold)] = -1
-	#ratings[(ratings!=0)&(ratings>=threshold)] = 1
 	## Filter
-	print("Items")
-	print(items.shape == (nitems, emb_dim))
-	print("Users")
-	print(users.shape == (nusers, emb_dim_user))
-	print("Categories")
-	print(item_categories.shape == (nitems, ncategories))
-	print("Phi")
-	print(Phi.shape == (ncategories, emb_dim))
-	print("_________")
 	if (nratings is not None):
 		assert nratings is None or nratings<=ratings.shape[0]
 		ratings_list = np.array(np.argwhere(ratings.values!=0).tolist()[:nratings])
@@ -647,15 +671,6 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		idx = item_categories.sum(axis=0)>0
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx]
-	print("Items")
-	print(items.shape == (nitems, emb_dim))
-	print("Users")
-	print(users.shape == (nusers, emb_dim_user))
-	print("Categories")
-	print(item_categories.shape == (nitems, ncategories))
-	print("Phi")
-	print(Phi.shape == (ncategories, emb_dim))
-	print("_________")
 	if (nitems is not None) and (nitems<=items.shape[0]):
 		item_idx = ratings.sum(axis=1).sort_values(ascending=False).index[:nitems]
 		ratings = ratings.loc[item_idx]
@@ -666,15 +681,6 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		idx = item_categories.sum(axis=0)>0
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx] 
-	print("Items")
-	print(items.shape == (nitems, emb_dim))
-	print("Users")
-	print(users.shape == (nusers, emb_dim_user))
-	print("Categories")
-	print(item_categories.shape == (nitems, ncategories))
-	print("Phi")
-	print(Phi.shape == (ncategories, emb_dim))
-	print("_________")
 	if (nusers is not None) and (nusers<=users.shape[0]):
 		user_idx = ratings.sum(axis=0).sort_values(ascending=False).index[:nusers]
 		ratings = ratings[user_idx]
@@ -685,49 +691,51 @@ def movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim
 		idx = item_categories.sum(axis=0)>0
 		item_categories = item_categories[item_categories.columns[idx]]
 		Phi = Phi.loc[idx]
-	print("Items")
-	print(items.shape == (nitems, emb_dim))
-	print("Users")
-	print(users.shape == (nusers, emb_dim_user))
-	print("Categories")
-	print(item_categories.shape == (nitems, ncategories))
-	print("Phi")
-	print(Phi.shape == (ncategories, emb_dim))
-	print("_________")
-	raise ValueError
-	nitems = items.shape[0] 
-	nratings = int((ratings!=0).sum().sum())
-	nusers = users.shape[0] 
+	if (nitems is None):
+		nitems = items.shape[0] 
+	if (nratings is None):
+		nratings = int((ratings!=0).sum().sum())
+	if (nusers is None):
+		nusers = users.shape[0] 
 	ncategories = item_categories.shape[1]
+	if (False):
+		print("Items")
+		print(items.shape == (nitems, items.shape[1]))
+		print("Users")
+		print(users.shape == (nusers, emb_dim_user))
+		print("Categories")
+		print(item_categories.shape == (nitems, ncategories))
+		print("Phi")
+		print(Phi.shape == (ncategories, emb_dim))
+		print("_________")
 	## Define user contexts
 	npulls = np.zeros((nusers, nitems))
 	contexts = np.zeros((nusers, nitems))
 	## Generate ratings 
 	ratings_ = [None] * nratings
-	ratings_list = np.array(np.argwhere(ratings.values>0).tolist()[:nratings])
-	for nrat, [i, u] in tqdm(enumerate(ratings_list.tolist())):
+	ratings_list = np.array(np.argwhere(ratings.values>0).tolist()[:nratings]).tolist()
+	threshold = int(np.max(ratings.values)/2)+1
+	ratings[(ratings!=0)&(ratings<threshold)] = -1
+	ratings[(ratings!=0)&(ratings>=threshold)] = 1
+	for nrat, [i, u] in tqdm(enumerate(ratings_list)):
 		## Get reward
-		rat = ratings.values[i,u]-threshold
+		rat = ratings.values[i,u]#-threshold
 		bin_context = context_array2int(contexts[u].flatten(), threshold)
-		print("")
-		print(item_categories.shape)
-		print(items.shape)
-		print(Phi.shape)
 		item_cat = "".join(list(map(str,item_categories.loc[items.index[i]].values.flatten().tolist())))
-		ratings_[nrat] = [u, i, npulls[u,i], item_cat, bin_context, rat]
+		ratings_[nrat] = [u, i, int(npulls[u,i]), item_cat, bin_context, float(rat)]
 		## Update user context
 		contexts[u, i] = (contexts[u, i]*npulls[u,i]+rat)/(npulls[u,i]+1)
 		npulls[u,i] += 1
-		#if (nrat > 799): ##
-		#	ratings_ = ratings_[:nrat]
-		#	break ##
 	ratings_ = ratings_[:nrat]
 	ratings_ = np.array(ratings_, dtype=object)
 	## 5. Reward 
-	Theta, item_embeddings = learn_from_ratings(ratings_[:1000,:], items, emb_dim)
+	theta, item_embeddings = learn_from_ratings(ratings_, items, min(emb_dim,items.shape[1]))
 	emb_dim = item_embeddings.shape[1]
-	reward = SyntheticReward(Theta, item_embeddings, sigma=sigma, m=threshold)
-	return ratings_, {"item_embeddings": item_embeddings, "user_embeddings": users, "item_categories": item_categories, "Phi": Phi}, reward
+	reward = SyntheticReward(item_embeddings, add_params=dict(theta=theta, item_categories=item_categories, p_visit=p_visit))
+	info = {"item_embeddings": item_embeddings, "user_embeddings": users, "item_categories": item_categories, "Phi": Phi}
+	with open(savename, "wb") as f:
+		pickle.dump(dict(ratings=ratings_,info=info,theta=theta,p_visit=p_visit), f)
+	return ratings_, info, reward
 	
 if __name__=="__main__":
 	nusers=nitems=10
@@ -735,10 +743,11 @@ if __name__=="__main__":
 	ncategories=2
 	emb_dim=512
 	emb_dim_user=11
+	p_visit=0.9
 	print("_"*27)
 	if (False):
 		print("SYNTHETIC")
-		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, loc=0, scale=1)
+		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit)
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
@@ -759,19 +768,17 @@ if __name__=="__main__":
 		print("_"*27)
 	if (True): ## TODO retest Movielens
 		print("MOVIELENS")
-		ratings_, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=8) 
+		if (not os.path.exists("movielens_instance.pck")):
+			ratings_, info, reward = movielens(nratings=None, ncategories=None, emb_dim=8, p_visit=p_visit, savename="movielens_instance.pck")
+		else:
+			with open("movielens_instance.pck", "rb") as f:
+				di = pickle.load(f)
+			ratings, info, theta = [di[n] for n in ["ratings", "info", "theta"]]
+			reward = SyntheticReward(info["item_embeddings"], add_params=dict(theta=theta, item_categories=info["item_categories"], p_visit=p_visit))
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
 		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "Phi"]]
-		print("Items")
-		print(item_embeddings.shape == (nitems, emb_dim))
-		print("Users")
-		print(user_embeddings.shape == (nusers, emb_dim_user))
-		print("Categories")
-		print(item_categories)
-		print("Phi")
-		print(Phi)
 		print(get_context_from_rating(ratings_[-1]))
 		context = context_int2array(get_context_from_rating(ratings_[-1]), nitems)
 		action_emb = item_embeddings.loc[item_embeddings.index[0]].values.reshape(1,-1)

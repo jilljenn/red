@@ -22,8 +22,17 @@ def get_context_from_rating(rating):
 def get_item_from_rating(rating):
 	return rating[1]
 	
+def get_user_from_rating(rating):
+	return rating[0]
+	
+def get_npull_from_rating(rating):
+	return rating[2]
+	
+def get_item_category_from_rating(rating):
+	return rating[3]
+	
 def get_rating_from_rating(rating):
-	return rating[-1]
+	return rating[5]
     
 def get_available_actions(context):
 	'''

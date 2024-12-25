@@ -3,7 +3,8 @@ nitems: 100      ## number of items
 nratings: 500    ## number of ratings
 ncategories: 2   ## number of item categories
 data_type: "synthetic"
-policies: ["LogisticUCB","LogisticUCBDiversity","CustomGreedy","CustomDPP","CustomSampling"]
+policies: ["CustomGreedy","CustomDPP","CustomSampling"]
+#["LinUCB","LinUCBDiversity","CustomGreedy","CustomDPP","CustomSampling"]
 #"CustomBruteForce",
 emb_dim: 10      ## item embedding size
 emb_dim_user: 2  ## user embeddings size
