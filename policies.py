@@ -3,12 +3,16 @@
 import numpy as np
 import itertools
 from dppy.finite_dpps import FiniteDPP
+from numpy.linalg import slogdet
+from scipy.stats import chi2
+from sklearn.linear_model import SGDClassifier
 
 from tools import *
 
 colors = {      "LinUCB": "gray", "LinUCBDiversity": "pink", 
 		"CustomGreedy": "green", "CustomBruteForce": "firebrick", "CustomDPP": "steelblue", "CustomSampling": "rebeccapurple", 
-		"EpsilonGreedy": "black"
+		"EpsilonGreedy": "black", "DiversityDPP": "orange", "LogisticUCB1": "cyan", "LinOASM": "blue",
+		"LogisticRegression": "magenta"
 	}
 
 class Policy(object):
@@ -35,6 +39,9 @@ class Policy(object):
 		self.dim = self.nitems+self.nfeatures
 		self.random_state = random_state
 		self.name = "Policy"
+		
+	def f_mix(self, a, c):
+		return np.concatenate((a, c), axis=1).astype(float)
 		
 	def fit(self, ratings):
 		raise NotImplemented
@@ -63,9 +70,6 @@ class LogisticPolicy(Policy):
 		self.arms = []
 		self.rewards = []
 		self.ctr = 0
-		
-	def f_mix(self, a, c):
-		return np.concatenate((a, c), axis=1).astype(float)
 		
 	def sigmoid(self, x):
 		return 1/(1+np.exp(-x))
@@ -144,8 +148,6 @@ class Custom(LogisticPolicy):
 		qis /= np.max(qis)                      ## rescale values for numerical approximations
 		qis[qis<=0] = np.min(qis[qis>0])/2      ## positive scores
 		ids_samples = self.sample(qis, k)
-		if (len(ids_samples)!=k):
-			print((self.name, len(ids_samples), k, ids_samples))
 		assert len(ids_samples)==k
 		return all_items[available_items_ids][ids_samples]
 		
@@ -290,9 +292,6 @@ class EpsilonGreedy(LogisticPolicy):
 		ids_samples[eps] = np.random.choice([i for i in range(len(qis)) if (i not in ids_samples)], p=None, size=np.sum(eps))
 		return all_items[available_items_ids][ids_samples]
 		
-from numpy.linalg import slogdet
-from scipy.stats import chi2
-		
 ## LogisticUCB-1 from Faury et al, 2020 https://arxiv.org/pdf/2002.07530
 class LogisticUCB1(LogisticPolicy):
 	def __init__(self, info, max_steps=5, lazy_update_fr=5, random_state=1234):
@@ -324,12 +323,14 @@ class LogisticUCB1(LogisticPolicy):
 		ucb_bonus = self.update_ucb_bonus()
 		# select arm
 		all_scores = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
-		arm = np.reshape(arm_set[np.argmax(all_scores),:], (-1,))
+		ids_samples = np.argsort(all_scores)[-k:]
 		# update design matrix and inverse
-		self.design_matrix += np.outer(arm, arm)
-		self.design_matrix_inv += -np.dot(self.design_matrix_inv, np.dot(np.outer(arm, arm), self.design_matrix_inv)) \
-			/ (1 + np.dot(arm, np.dot(self.design_matrix_inv, arm)))
-		return arm
+		#self.design_matrix += np.outer(arm, arm)
+		for i in ids_samples:
+			arm = np.reshape(arm_set[i,:], (-1,))
+			self.design_matrix_inv += -np.dot(self.design_matrix_inv, np.dot(np.outer(arm, arm), self.design_matrix_inv)) \
+				/ (1 + np.dot(arm, np.dot(self.design_matrix_inv, arm)))
+		return all_items[available_items_ids][ids_samples]
 
 	## https://github.com/louisfaury/logistic_bandit/blob/master/logbexp/algorithms/logistic_ucb_1.py
 	def update_ucb_bonus(self):
@@ -357,57 +358,41 @@ class LogisticUCB1(LogisticPolicy):
 		pred_reward = self.sigmoid(np.sum(self.theta * arm))
 		bonus = ucb_bonus * norm
 		return pred_reward + bonus
-	
-	
-
-import scipy.optimize
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.linear_model import SGDRegressor
-
-## https://stackoverflow.com/questions/62376164/how-to-change-max-iter-in-optimize-function-used-by-sklearn-gaussian-process-reg
-class GPR(GaussianProcessRegressor):
-    def __init__(self, kernel=None, _max_iter=None, n_restarts_optimizer=None, alpha=None, random_state=None, **kwargs):
-        super().__init__(kernel=kernel, n_restarts_optimizer=n_restarts_optimizer, alpha=alpha, random_state=random_state, **kwargs)
-        self._max_iter = _max_iter
-
-    def _constrained_optimization(self, obj_func, initial_theta, bounds):
-        def new_optimizer(obj_func, initial_theta, bounds):
-            res = scipy.optimize.minimize(
-                obj_func,
-                initial_theta,
-                method="L-BFGS-B",
-                jac=True,
-                bounds=bounds,
-                options=dict(maxiter=self._max_iter),
-            )
-            theta_opt = res.x
-            func_min = res.fun
-            return theta_opt, func_min
-        self.optimizer = new_optimizer
-        return super()._constrained_optimization(obj_func, initial_theta, bounds)
-
-## Concatenate the item embedding and the user context
-## and learn a single Gaussian Process
-class LinUCB(Policy):
-	def __init__(self, info, random_state=1234):
-		self.name = "LinUCB"
-		self.random_state = random_state
-		self.item_embeddings = info["item_embeddings"]
-		#self.kernel = DotProduct(1.0, (1e-3, 1e3))
-		#self.kernel = DotProduct(1e-3)#, (1e-3, 1e3))
-		self.kernel = RBF(1.0, (1e-5, 1e5))
-		self.gp = None
-		self.nitems = self.item_embeddings.shape[0]
 		
-	def fit(self, ratings):
-		self.gp = GPR(kernel=self.kernel, _max_iter=1000, n_restarts_optimizer=10, alpha=1e-2, random_state=self.random_state)
-		user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems) for i in range(ratings.shape[0])])
-		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]],:]
-		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
-		y_user0 = np.array([get_rating_from_rating(ratings[i]) for i in range(ratings.shape[0])]).astype(float).ravel()
-		with warnings.catch_warnings():
-			warnings.filterwarnings("ignore", category=ConvergenceWarning)
-			self.gp.fit(X_user0, y_user0)
+class LinOASM(LogisticUCB1):
+	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, lbd=1.):
+		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr)
+		self.name = "LinOASM"
+		self.lbd = lbd
+		self.clean()
+		
+	def compute_qdd(self, qi, S):
+		Phi = self.item_embeddings.values[S,:]
+		diversity = np.linalg.det(Phi.dot(Phi.T))
+		score = qi * diversity
+		return score
+		
+	def sample(self, qis, k):
+		'''
+		Recursively adds items to the subset
+		until it is of size k
+		Added item a is argmax of the score
+		q[a]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T)
+		where q[i] is the positive quality score for i
+		and Phi_{S} is the embedding matrix restricted to indices in S 
+		'''
+		max_comb = []
+		while True:
+			all_scores = [self.compute_qdd(qis[j], max_comb+[j]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
+			if (np.max(all_scores)==-float("inf")):
+				break
+			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
+			if (len(max_comb)+len(candidates)>k):
+				max_comb += np.random.choice(candidates, p=None, size=k-len(max_comb)).ravel().tolist()
+				break
+			else:
+				max_comb += candidates
+		return max_comb
 			
 	def predict(self, context, k, only_available=False):
 		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
@@ -417,47 +402,108 @@ class LinUCB(Policy):
 			if (only_available):
 				return None
 		items = self.item_embeddings.values[available_items_ids,:]
-		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
-		X_user = np.concatenate((items, contexts), axis=1).astype(int).astype(float)
-		y_pred, y_std = self.gp.predict(X_user, return_std=True)
-		scores = np.multiply((1+y_pred), y_std).flatten()
 		all_items = np.arange(available_items_ids.shape[0])
-		return all_items[available_items_ids][np.argsort(scores)[(-k):]]
+		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
+		X_user = self.f_mix(items, contexts)
+		arm_set = np.array(X_user)
+		## https://github.com/louisfaury/logistic_bandit/blob/master/logbexp/algorithms/logistic_ucb_1.py
+		# update bonus bonus
+		ucb_bonus = self.update_ucb_bonus()
+		# select arm
+		qis = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
+		ids_samples = self.sample(qis, k)
+		return all_items[available_items_ids][ids_samples]
 		
-	def update(self, context, rec_items, reward, div_intra, div_inter):
-		pass # no update post fit
-		
-## Concatenate the item embedding and the user context
-## use as feedback reward*diversity with respect to context
-## and learn a single Gaussian Process
-class LinUCBDiversity(LinUCB):
+class LogisticRegression(Policy):
 	def __init__(self, info, random_state=1234):
-		super().__init__(info)
-		self.name = "LinUCBDiversity"
-		self.random_state = random_state
+		super().__init__(info, random_state=random_state)
+		self.name = "LogisticRegression"
+		self.clean()
+		
+	def clean(self):
+		self.model = SGDClassifier(loss='log_loss', fit_intercept=False)
+		self.theta = None
 		
 	def fit(self, ratings):
-		self.gp = GPR(kernel=self.kernel, _max_iter=1000, n_restarts_optimizer=10, alpha=1e-2, random_state=self.random_state)
-		user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems) for i in range(ratings.shape[0])])
-		item_actions = self.item_embeddings.loc[self.item_embeddings.index[[get_item_from_rating(ratings[i]) for i in range(ratings.shape[0])]]].values
-		X_user0 = np.concatenate((item_actions, user_contexts), axis=1).astype(int).astype(float)
-		y_user0 = np.array([get_rating_from_rating(ratings[i]) for i in range(ratings.shape[0])]).astype(float).ravel()
-		y_user0div = []
-		for i in range(ratings.shape[0]):
-			action = item_actions[i].reshape(1,-1)
-			context = user_contexts[i]
-			available_items_ids = np.zeros(context.shape, dtype=bool) #get_available_actions(context)
-			if (available_items_ids.sum()==0):
-				#print(f"All items are explored for user {context_array2int(context, 1)}")
-				available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
-			context_embeddings = self.item_embeddings.values[~available_items_ids,:]
-			if (context_embeddings.shape[0]==0):
-				div = 1.0
+		contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), self.nitems).ravel() for i in range(ratings.shape[0])])
+		actions = np.array([self.item_embeddings.loc[self.item_embeddings.index[get_item_from_rating(ratings[i])],:].values.ravel() for i in range(ratings.shape[0])])
+		rewards = np.array([get_rating_from_rating(ratings[i]) for i in range(ratings.shape[0])])
+		X_user = self.f_mix(actions, contexts)
+		Y_user = rewards
+		self.model.partial_fit(X_user, Y_user, list(sorted(np.unique(Y_user.astype(int)))))
+		self.theta = self.model.coef_
+		
+	def predict(self, context, k, only_available=False):
+		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
+		if (available_items_ids.sum()==0):
+			#print(f"All items are explored for user {context_array2int(context, 1)}")
+			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
+			if (only_available):
+				return None
+		items = self.item_embeddings.values[available_items_ids,:]
+		all_items = np.arange(available_items_ids.shape[0])
+		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
+		X_user = self.f_mix(items, contexts)
+		qis = self.model.predict_proba(X_user)#.ravel()
+		qis = qis[:,1].ravel()
+		# select arm
+		ids_samples = self.sample(qis, k)
+		return all_items[available_items_ids][ids_samples]
+		
+	def update(self, context, rec_items, reward, div_intra, div_inter):
+		contexts = np.tile(context.reshape(1,-1), (rec_items.shape[0], 1))
+		X_user = self.f_mix(rec_items, contexts)
+		Y_user = reward
+		self.model.partial_fit(X_user, Y_user)
+		self.theta = self.model.coef_
+		
+	def compute_qdd(self, qi, S):
+		Phi = self.item_embeddings.values[S,:]
+		diversity = np.linalg.det(Phi.dot(Phi.T))
+		score = qi * diversity
+		return score
+		
+	def sample(self, qis, k):
+		'''
+		Recursively adds items to the subset
+		until it is of size k
+		Added item a is argmax of the score
+		q[a]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T)
+		where q[i] is the positive quality score for i
+		and Phi_{S} is the embedding matrix restricted to indices in S 
+		'''
+		max_comb = []
+		while True:
+			all_scores = [self.compute_qdd(qis[j], max_comb+[j]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
+			if (np.max(all_scores)==-float("inf")):
+				break
+			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
+			if (len(max_comb)+len(candidates)>k):
+				max_comb += np.random.choice(candidates, p=None, size=k-len(max_comb)).ravel().tolist()
+				break
 			else:
-				embs = np.concatenate((context_embeddings, action), axis=0)
-				div = np.abs(np.linalg.det(self.kernel(embs)))
-			y_user0div.append(div)
-		y_user0 = np.multiply( y_user0, np.array(y_user0div) )
-		with warnings.catch_warnings():
-			warnings.filterwarnings("ignore", category=ConvergenceWarning)
-			self.gp.fit(X_user0, y_user0)
+				max_comb += candidates
+		return max_comb
+		
+class DiversityDPP(Custom):
+	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
+		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
+		self.name = "DiversityDPP"
+		self.DPP = None
+		
+	def sample(self, qis, k):
+		'''
+		Samples according to the L-ensemble
+		where L = Phi.Phi^T
+		
+		Samples M subsets of size k at random
+		and returns the subset S that maximizes
+		det(Phi_{S+[a]}Phi_{S+[a]}^T)
+		where Phi is the item embedding matrix 
+		'''
+		_, Phi = self.get_L(qis)
+		L = Phi.dot(Phi.T)
+		self.DPP = FiniteDPP('likelihood', **{'L': L})
+		self.DPP.sample_exact_k_dpp(size=k)
+		lst = self.DPP.list_of_samples[0]
+		return lst

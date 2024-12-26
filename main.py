@@ -2,13 +2,14 @@
 
 import pandas as pd
 import numpy as np
+import pickle
 import yaml
 from joblib import Parallel, delayed, parallel_backend
 from multiprocessing import cpu_count
 from tqdm import trange
 import os
 
-from data import synthetic, movielens
+from data import synthetic, movielens, SyntheticReward
 from simulate import single_run, single_trajectory
 from plots import plot_umap, plot_regret
 from tools import *
@@ -48,16 +49,16 @@ for policy in policies:
 	results_traj.update({policy: (results, contexts)})
 
 ## 3. User scatter plots of UMAPs of item embeddings according to user feedback (non selected, selected, selected and liked, selected and disliked)
-plot_umap(info["item_embeddings"].values, results_traj, k, fig_title="figure2")
+plot_umap(info["item_embeddings"].values, results_traj, k, fig_title=f"{data_type}_figure2")
 
 ## 4. Simulate the results from the policy
 seeds = np.random.choice(range(int(1e8)), size=niters)
 if ((niters==1) or (njobs==1)):
-	results_list = [single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma, verbose, seeds[iterr]) for iterr in trange(niters)]
+	results_list = [single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma, verbose, seeds[iterr], savefname=f"{data_type}_seed={seeds[iterr]}_intermediary_results.pck") for iterr in trange(niters)]
 else:
 	with parallel_backend('loky', inner_max_num_threads=njobs):
-		results_list = Parallel(n_jobs=njobs, backend='loky')(delayed(single_run)(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma, verbose, seeds[iterr]) for iterr in trange(niters))
+		results_list = Parallel(n_jobs=njobs, backend='loky')(delayed(single_run)(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma, verbose, seeds[iterr], savefname=f"{data_type}_seed={seeds[iterr]}_intermediary_results.pck") for iterr in trange(niters))
 
 ## 5. Plots for reward and diversity
-plot_regret(results_list, policies, horizon, fig_title="figure1")
+plot_regret(results_list, policies, horizon, fig_title=f"{data_type}_figure1")
 

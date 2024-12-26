@@ -3,11 +3,12 @@
 import numpy as np
 from tqdm import tqdm
 from time import time
+import pickle
 
 from policies import *
 from tools import *
 
-def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=0.1, gamma=1., verbose=False, aggreg="sum"):
+def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=0.1, gamma=1., verbose=False, aggreg="sum", savefname="intermediary_simulate.pck"):
 	'''
 	Simulate some rounds of recommendations
 	
@@ -37,12 +38,19 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 	results : dictionary of arrays of shape (horizon, 4)
 		for each policy, reward regret, aggregated feedback, intrabatch diversity regret, interbatch diversity regret at each time t
 	'''
-	results = {policy.name: np.zeros((horizon, 4)) for policy in trained_policies}
+	if (os.path.exists(savefname)):
+		with open(savefname, "rb") as f:
+			di = pickle.load(f)
+		results = di["results"]
+		start_t = di["t"]
+	else:
+		results = {policy.name: np.zeros((horizon, 4)) for policy in trained_policies}
+		start_t = 0
 	#results.update({"oracle reward": np.zeros((horizon, 3)), "oracle diversity": np.zeros((horizon, 3))})
 	
 	aggreg_func = choose_aggregation(aggreg)
 	
-	for t in tqdm(range(1,horizon+1), leave=False):
+	for t in tqdm(range(start_t+1,horizon+1), leave=False):
 	
 		## draw a user context or create a new user
 		draw = np.random.choice([0,1], p=[1-prob_new_user, prob_new_user])
@@ -107,12 +115,15 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			reg_reward = aggreg_func(reward.get_means(context, rt))
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
-			#print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}") ## TODO
+			print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}") ## TODO
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context.ravel()} (r={np.round(rrt,3)} (reward={np.round(reg_reward,3)}), dintra={np.round(dia,3)}, dinter={np.round(die,3)})")
 				
 		if (verbose):
 			print("")
+			
+		with open(savefname, "wb") as f:
+			pickle.dump({"results": results, "t": t}, f)
 		
 	return results
 	
@@ -149,7 +160,6 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 	aggreg_func = choose_aggregation(aggreg)
 	
 	for t in tqdm(range(1,horizon+1), leave=False):
-	
 		rt_ids = policy.predict(context, k, only_available=False)#True)
 		if (rt_ids is None):
 			results = results[:(t-1),:]
@@ -169,7 +179,7 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 
 	return results, contexts
 
-def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma=1., verbose=False, random_seed=13234):
+def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma=1., verbose=False, random_seed=13234, savefname="intermediary_simulate.pck"):
 	seed_everything(int(random_seed))
 	trained_policies = []
 	for policy_name in policies:
@@ -186,7 +196,7 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 		
 	user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), nitems) for i in range(ratings.shape[0])])
 	stime = time()
-	results = simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=prob_new_user, gamma=gamma, verbose=verbose)
+	results = simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=prob_new_user, gamma=gamma, verbose=verbose, savefname=savefname)
 	runtime = time()-stime
 	return results
 

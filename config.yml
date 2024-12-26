@@ -3,18 +3,17 @@ nitems: 200      ## number of items
 nratings: 500    ## number of ratings
 ncategories: 2   ## number of item categories
 data_type: "synthetic"
-policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1"]
-#["EpsilonGreedy","CustomGreedy","CustomDPP","CustomSampling"]
-#["LinUCB","LinUCBDiversity"
+policies: ["LogisticRegression"]
+#["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression"]
 emb_dim: 10      ## item embedding size
 emb_dim_user: 2  ## user embeddings size
 
 k: 10            ## number of items to sample at each time
 seed: 1111       ## random seed
-horizon: 30      ## recommendation rounds
+horizon: 10      ## recommendation rounds
 p_visit: 1.0
 
-niters: 10       ## number of iterations
+niters: 3        ## number of iterations
 njobs: 1         ## number of parallel jobs
 gamma: 1.0       ## discounting factor for the time
 prob_new_user: 0.

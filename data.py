@@ -131,9 +131,9 @@ class Reward(object):
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
 		available_items = self.item_embeddings[available_items_ids,:]
 		pi = []
-		for k in range(K): ## build the oracle greedily as the function is submodular
+		for k in range(K): ## build the oracle greedily as (we hope that) the diversity function is submodular
 			vals = np.array([
-					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=None if (intra) else context, action_ids=np.array(pi+[i])) ) 
+					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=(None if (intra) else context), action_ids=np.array(pi+[i])) ) 
 					for i in range(available_items.shape[0]) if (i not in pi)
 				])
 			vals = vals.flatten().tolist()
@@ -151,6 +151,8 @@ class Reward(object):
 		'''
 		Obtains the optimal selection for the input context
 		with respect to the reward 
+		That is, recommend the K items with top expected rewards
+		for that context
 		
 		---
 		Parameters
