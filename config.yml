@@ -1,18 +1,18 @@
 nusers: 10       ## number of users
-nitems: 100      ## number of items
+nitems: 200      ## number of items
 nratings: 500    ## number of ratings
 ncategories: 2   ## number of item categories
 data_type: "synthetic"
-policies: ["CustomGreedy","CustomDPP","CustomSampling"]
-#["LinUCB","LinUCBDiversity","CustomGreedy","CustomDPP","CustomSampling"]
-#"CustomBruteForce",
+policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1"]
+#["EpsilonGreedy","CustomGreedy","CustomDPP","CustomSampling"]
+#["LinUCB","LinUCBDiversity"
 emb_dim: 10      ## item embedding size
 emb_dim_user: 2  ## user embeddings size
 
 k: 10            ## number of items to sample at each time
 seed: 1111       ## random seed
 horizon: 30      ## recommendation rounds
-p_visit: 0.9
+p_visit: 1.0
 
 niters: 10       ## number of iterations
 njobs: 1         ## number of parallel jobs
@@ -20,4 +20,4 @@ gamma: 1.0       ## discounting factor for the time
 prob_new_user: 0.
 verbose: false
 
-horizon_traj: 2
+horizon_traj: 10

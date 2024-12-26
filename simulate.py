@@ -2,6 +2,9 @@
 
 import numpy as np
 from tqdm import tqdm
+from time import time
+
+from policies import *
 from tools import *
 
 def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=0.1, gamma=1., verbose=False, aggreg="sum"):
@@ -44,16 +47,18 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		## draw a user context or create a new user
 		draw = np.random.choice([0,1], p=[1-prob_new_user, prob_new_user])
 		if (draw):
-			context = np.zeros((1, user_contexts.shape[1]))
+			context = np.zeros((user_contexts.shape[1], 1))
 		else:
 			i_user = np.random.choice(range(user_contexts.shape[0]))
-			context = user_contexts[i_user].reshape(1, -1)
+			context = user_contexts[i_user].reshape(-1, 1)
 		
 		rt_ids = reward.get_oracle_reward(context, k)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
-		div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0])
-		div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])
+		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0])
+		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])
+		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)
+		div_intra = reward.get_diversity(rt, action_ids=rt_ids)
 		r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
 		if (verbose):# or (t%int(horizon//10)==0)):
 			print(f"At t={t}, Reward Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
@@ -89,8 +94,10 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			rt_ids = policy.predict(context, k)
 			rt = reward.item_embeddings[rt_ids,:]
 			yt = reward.get_reward(context, rt)
-			div_inter = reward.get_diversity(rt[yt.flatten()>0,:], context=context, action_ids=rt_ids[yt.flatten()>0])
-			div_intra = reward.get_diversity(rt[yt.flatten()>0,:], action_ids=rt_ids[yt.flatten()>0])
+			#div_inter = reward.get_diversity(rt[yt.flatten()>0,:], context=context, action_ids=rt_ids[yt.flatten()>0])
+			#div_intra = reward.get_diversity(rt[yt.flatten()>0,:], action_ids=rt_ids[yt.flatten()>0])
+			div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)
+			div_intra = reward.get_diversity(rt, action_ids=rt_ids)
 			res = results[policy.name]
 			#res[t-1,:] = [aggreg_func(yt)*gamma**t, div_intra, div_inter]
 			rrt = aggreg_func(yt)
@@ -100,7 +107,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			reg_reward = aggreg_func(reward.get_means(context, rt))
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
-			print((policy.name, "theta", np.linalg.norm(reward.theta - policy.theta)))
+			#print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}") ## TODO
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context.ravel()} (r={np.round(rrt,3)} (reward={np.round(reg_reward,3)}), dintra={np.round(dia,3)}, dinter={np.round(die,3)})")
 				
@@ -160,6 +167,42 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 		if (verbose):# or (t%int(horizon//10)==0)):
 			print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {pretty_print_context(cc)} -> {pretty_print_context(context.ravel())} (aggregated reward={np.round(rrt,3)})")
 
+	return results, contexts
+
+def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_user, gamma=1., verbose=False, random_seed=13234):
+	seed_everything(int(random_seed))
+	trained_policies = []
+	for policy_name in policies:
+		policy = eval(policy_name)(info, random_state=random_seed)
+		policy.fit(ratings)
+
+		if (False):
+			user_context = context_int2array(get_context_from_rating(ratings[-1]), nitems)
+			rt_ids = policy.predict(user_context, k)
+			rt = reward.item_embeddings[rt_ids,:]
+			yt = reward.get_reward(user_context, rt)
+			print(f"{policy_name}: User with initial context {get_context_from_rating(ratings[-1])} ({user_context.ravel()}) recommended items {rt_ids} with scores {np.mean(yt)}")	
+		trained_policies += [policy]
+		
+	user_contexts = np.array([context_int2array(get_context_from_rating(ratings[i]), nitems) for i in range(ratings.shape[0])])
+	stime = time()
+	results = simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=prob_new_user, gamma=gamma, verbose=verbose)
+	runtime = time()-stime
+	return results
+
+def single_trajectory(policy_name, info, ratings, k, horizon, reward, gamma=1., context=None, verbose=False, random_seed=13234):
+	seed_everything(int(random_seed))
+	nitems = info["item_embeddings"].shape[0]
+	if (context is None):
+		blank_context = np.zeros((nitems, 1))
+		context = blank_context.copy()
+
+	policy = eval(policy_name)(info, random_state=random_seed)
+	policy.fit(ratings)
+	
+	stime = time()
+	results, contexts = simulate_trajectory(k, horizon, policy, reward, context=context, gamma=gamma, verbose=verbose)
+	runtime = time()-stime
 	return results, contexts
 	
 if __name__=="__main__":

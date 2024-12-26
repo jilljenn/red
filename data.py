@@ -198,7 +198,7 @@ class SyntheticReward(Reward):
 		'''
 		assert "theta" in add_params and add_params["theta"] is not None
 		assert "item_categories" in add_params and add_params["item_categories"] is not None
-		assert "p_visit" in add_params and add_params["p_visit"] > 0 and add_params["p_visit"] < 1
+		assert "p_visit" in add_params and add_params["p_visit"] >= 0 and add_params["p_visit"] <= 1
 		super().__init__(item_embeddings, add_params=add_params)
 		self.m = 1
 		self.name = "Synthetic"
@@ -223,7 +223,7 @@ class SyntheticReward(Reward):
 		#context_categories = self.item_categories[~available_items_ids,:].sum(axis=0)
 		for k in range(K):
 			xk = self.f_mix(action_embeddings[k].reshape(-1,1), context.reshape(-1,1))
-			means[k] = self.theta.T.dot(xk)
+			means[k] = self.theta.T.dot(xk)[0,0]
 			#means[k] = context_categories.dot(self.Phi.dot(action_embeddings[k].reshape(-1,1)))
 		return means
 		
@@ -766,21 +766,22 @@ if __name__=="__main__":
 		print(reward.get_reward(context, action_emb))
 		print(reward.get_means(context, action_emb))
 		print("_"*27)
-	if (True): ## TODO retest Movielens
+	if (True): 
 		print("MOVIELENS")
 		if (not os.path.exists("movielens_instance.pck")):
 			ratings_, info, reward = movielens(nratings=None, ncategories=None, emb_dim=8, p_visit=p_visit, savename="movielens_instance.pck")
 		else:
 			with open("movielens_instance.pck", "rb") as f:
 				di = pickle.load(f)
-			ratings, info, theta = [di[n] for n in ["ratings", "info", "theta"]]
+			ratings_, info, theta = [di[n] for n in ["ratings", "info", "theta"]]
 			reward = SyntheticReward(info["item_embeddings"], add_params=dict(theta=theta, item_categories=info["item_categories"], p_visit=p_visit))
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
 		item_embeddings, user_embeddings, item_categories, Phi = [info[s] for s in ["item_embeddings", "user_embeddings", "item_categories", "Phi"]]
 		print(get_context_from_rating(ratings_[-1]))
-		context = context_int2array(get_context_from_rating(ratings_[-1]), nitems)
+		nitems = info["item_embeddings"].shape[0]
+		context = context_int2array(get_context_from_rating(ratings_[-1]), nitems).reshape(-1,1)
 		action_emb = item_embeddings.loc[item_embeddings.index[0]].values.reshape(1,-1)
 		print(reward.get_reward(context, action_emb))
 		print(reward.get_means(context, action_emb))
