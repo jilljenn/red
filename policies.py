@@ -2,6 +2,7 @@
 
 import numpy as np
 import itertools
+from copy import deepcopy
 from dppy.finite_dpps import FiniteDPP
 from numpy.linalg import slogdet
 from scipy.stats import chi2
@@ -9,10 +10,9 @@ from sklearn.linear_model import SGDClassifier
 
 from tools import *
 
-colors = {      "LinUCB": "gray", "LinUCBDiversity": "pink", 
-		"CustomGreedy": "green", "CustomBruteForce": "firebrick", "CustomDPP": "steelblue", "CustomSampling": "rebeccapurple", 
-		"EpsilonGreedy": "black", "DiversityDPP": "orange", "LogisticUCB1": "cyan", "LinOASM": "blue",
-		"LogisticRegression": "magenta"
+colors = {      "CustomGreedy": "green", "CustomBruteForce": "firebrick", "CustomDPP": "steelblue", "CustomSampling": "rebeccapurple", 
+		"EpsilonGreedy": "black", "DiversityDPP": "orange", "LogisticUCB1": "cyan", 
+		"LinOASM": "blue", "LogisticRegression": "magenta"
 	}
 
 class Policy(object):
@@ -40,19 +40,23 @@ class Policy(object):
 		self.random_state = random_state
 		self.name = "Policy"
 		
+	def clean(self):
+		pass
+		
 	def f_mix(self, a, c):
 		return np.concatenate((a, c), axis=1).astype(float)
 		
 	def fit(self, ratings):
 		raise NotImplemented
 		
-	def predict(context, k, only_available=False):
+	def predict(context, k, only_available=True):
 		raise NotImplemented
 		
 	def update(self, context, rec_items, reward, div_intra, div_inter):
 		raise NotImplemented
 		
-class LogisticPolicy(Policy):
+## Super class implementing the common estimator for theta across policies
+class LogisticPolicy_MLEFaury2020(Policy):
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5):
 		super().__init__(info, random_state)
 		self.name = "Policy"
@@ -114,13 +118,78 @@ class LogisticPolicy(Policy):
 				self.theta -= np.linalg.solve(self.hessian, grad)
 			self.ctr += 1
 		
-	def predict(context, k, only_available=False):
+	def predict(context, k, only_available=True):
 		raise NotImplemented
+
+## Online Mirror Descent: Zhang, Y. J., & Sugiyama, M. (2024). Online (multinomial) logistic bandit: Improved regret and constant computation cost. Advances in Neural Information Processing Systems, 36.
+## Lee, J., & Oh, M. H. (2024). Nearly minimax optimal regret for multinomial logistic bandit. arXiv preprint arXiv:2405.09831.
+## Lower computational and storage cost
+class LogisticPolicy(LogisticPolicy_MLEFaury2020):
+	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, reg_eta=0.01):
+		super().__init__(info, random_state, max_steps, lazy_update_fr)
+		self.reg_eta = reg_eta
+		self.name = "Policy"
+		self.reg_lambda = self.dim
+		self.theta = np.zeros((self.dim,1)) 
+		self.design_matrix_inv = (1 / self.reg_lambda) * np.eye(self.dim)
+
+	def sm(self, A, x, y=None):
+		'''
+		Apply the Sherman-Morrison formula to invert a matrix
+		
+		---
+		Parameters
+		A : array of shape (N, N)
+			an inverted matrix
+		x : array of shape (N, 1)
+			a vector
+		y : array of shape (N, 1) or None
+			a vector (equal to x if None)
+			
+		---
+		Returns
+		H : array of shape (N,N)
+			the inverse of matrix A+xy^T
+		'''
+		if (y is None):
+			y = x
+		matrix_norm = float(1+y.dot(A).dot(x.T))
+		return A - A.dot(x.T.dot(y).dot(A))/matrix_norm
+		
+	def gradsigmoid(self, x):
+		return self.sigmoid(x)*(1-self.sigmoid(x))
+		
+	def update(self, context, rec_items, reward, div_intra, div_inter):
+		self.theta = self.theta.reshape(-1,1)
+		inv_Hk = deepcopy(self.design_matrix_inv)
+		for i in range(rec_items.shape[0]):
+			arm = self.f_mix(rec_items[i,:].reshape(1,-1), context.reshape(1, -1))
+			self.arms.append(arm.ravel())
+			#print(("reward",reward[i]))
+			self.rewards.append(reward[i])
+			xtheta = float(arm.dot(self.theta.reshape(-1,1)))
+			#XX = arm.T.dot(arm) 
+			self.design_matrix_inv = self.sm(self.design_matrix_inv, self.sigmoid(xtheta)*arm, arm)
+			#self.hessian += self.sigmoid(xtheta)*XX 
+			## Online Mirror Descent
+			## Orabona, F. (2019). A modern introduction to online learning. arXiv preprint arXiv:1912.13213.
+			## Single projected gradient step
+			#Htk = Hk + self.reg_eta * self.gradsigmoid(xtheta)*XX
+			inv_Htk = self.sm(inv_Hk, self.reg_eta * self.gradsigmoid(xtheta) * arm, arm)
+			#print((xtheta, reward[i], arm.shape))
+			grad_l = (xtheta - reward[i])*arm.T
+			#print((thetak.shape, inv_Htk.dot(grad_l).shape))
+			thetakp = self.theta - self.reg_eta*inv_Htk.dot(grad_l)
+			self.theta = thetakp.reshape(self.theta.shape)/float(np.linalg.norm(thetakp,2))
+			#print((arm.shape, thetak.shape, "1"))
+			xtheta = float(arm.dot(self.theta.reshape(-1,1)))
+			inv_Hk = self.sm(inv_Hk, self.gradsigmoid(xtheta)*arm, arm)
 
 ########################
 ## Proposition        ##
 ########################
 
+## Super class implementing the underlying reward model
 class Custom(LogisticPolicy):
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr)
@@ -133,7 +202,7 @@ class Custom(LogisticPolicy):
 		self.alpha = alpha
 		self.clean()
 			
-	def predict(self, context, k, only_available=False):
+	def predict(self, context, k, only_available=True):
 		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
@@ -145,11 +214,12 @@ class Custom(LogisticPolicy):
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		qis = X_user.dot(self.theta)            ## only the individual qi's for available items
-		qis /= np.max(qis)                      ## rescale values for numerical approximations
-		qis[qis<=0] = np.min(qis[qis>0])/2      ## positive scores
+		if (np.max(qis)!=0):
+			qis /= np.max(qis)                      ## rescale values for numerical approximations
+		qis[qis<=0] = np.min(qis[qis>0])/2 if (qis>0).any() else 0.1  ## positive scores
 		ids_samples = self.sample(qis, k)
 		assert len(ids_samples)==k
-		return all_items[available_items_ids][ids_samples]
+		return all_items[available_items_ids][ids_samples].flatten()
 		
 	def sample(self, qis, k):
 		return np.argsort(list(qis))[-k:]
@@ -163,10 +233,11 @@ class Custom(LogisticPolicy):
 		
 	def get_L(self, qis, S=None):
 		quality = np.power(qis if (S is None) else qis[S], self.alpha)
-		Q = np.diag(quality)
+		Q = np.diag(quality.flatten())
 		Phi = self.item_embeddings.values if (S is None) else self.item_embeddings.values[S,:] 
 		return [Q, Phi]
-		
+	
+## Find K maximizers using brute force	
 class CustomBruteForce(Custom):
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
@@ -180,7 +251,7 @@ class CustomBruteForce(Custom):
 		where q[i] is the positive quality score for i
 		and Phi_{S} is the embedding matrix restricted to indices in S 
 		'''
-		assert len(scores)<101 and k<3
+		assert len(qis)<101 and k<3
 		all_combs = itertools.combinations(list(range(len(qis))), k)
 		max_val, max_comb = -float("inf"), None
 		for comb in all_combs:
@@ -188,7 +259,8 @@ class CustomBruteForce(Custom):
 			if (score > max_val):
 				max_comb = list(comb)
 		return max_comb
-		
+	
+## Find K maximizers using greedy	
 class CustomGreedy(Custom):
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
@@ -216,6 +288,7 @@ class CustomGreedy(Custom):
 				max_comb += candidates
 		return max_comb
 
+## Find K maximizers sampling M sets at random
 class CustomSampling(Custom):
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1., M=10):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
@@ -238,6 +311,7 @@ class CustomSampling(Custom):
 				max_comb = comb
 		return max_comb
 
+## Find K maximizers using a DPP
 class CustomDPP(Custom):
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
@@ -251,7 +325,7 @@ class CustomDPP(Custom):
 		
 		Samples M subsets of size k at random
 		and returns the subset S that maximizes
-		Pi_{i in S+[a]} q[i]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T)
+		Pi_{i in S+[a]} q[i]^(2*alpha) * det(Phi_{S+[a]}Phi_{S+[a]}^T)
 		where Q is the diagonal matrix of positive quality scores
 		and Phi is the item embedding matrix 
 		'''
@@ -259,7 +333,7 @@ class CustomDPP(Custom):
 		K = Q.dot(Phi)
 		L = K.dot(K.T)
 		self.DPP = FiniteDPP('likelihood', **{'L': L})
-		self.DPP.sample_exact_k_dpp(size=k)
+		self.DPP.sample_exact_k_dpp(size=k, random_state=self.random_state)
 		lst = self.DPP.list_of_samples[0]
 		return lst
 		
@@ -275,7 +349,7 @@ class EpsilonGreedy(LogisticPolicy):
 		self.epsilon = epsilon
 		self.clean()
 			
-	def predict(self, context, k, only_available=False):
+	def predict(self, context, k, only_available=True):
 		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
@@ -289,11 +363,12 @@ class EpsilonGreedy(LogisticPolicy):
 		qis = X_user.dot(self.theta)     ## only the individual qi's for available items
 		ids_samples = np.argsort(qis)[-k:]
 		eps = np.random.choice([False,True], p=[1-self.epsilon, self.epsilon], size=k)
-		ids_samples[eps] = np.random.choice([i for i in range(len(qis)) if (i not in ids_samples)], p=None, size=np.sum(eps))
-		return all_items[available_items_ids][ids_samples]
+		if (np.sum(eps)>0):
+			ids_samples[eps] = np.random.choice([i for i in range(len(qis)) if (i not in ids_samples)], p=None, size=np.sum(eps))
+		return all_items[available_items_ids][ids_samples].flatten()
 		
 ## LogisticUCB-1 from Faury et al, 2020 https://arxiv.org/pdf/2002.07530
-class LogisticUCB1(LogisticPolicy):
+class LogisticUCB1(LogisticPolicy_MLEFaury2020):
 	def __init__(self, info, max_steps=5, lazy_update_fr=5, random_state=1234):
 		super().__init__(info, max_steps=max_steps, lazy_update_fr=lazy_update_fr, random_state=random_state)
 		self.name = "LogisticUCB1"
@@ -305,7 +380,7 @@ class LogisticUCB1(LogisticPolicy):
 	def weighted_norm(self, x, A):
 		return np.sqrt(np.dot(x, np.dot(A, x)))
 			
-	def predict(self, context, k, only_available=False):
+	def predict(self, context, k, only_available=True):
 		## Returns k arms at a time /!\ select iteratively the arm to play
 		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
 		if (available_items_ids.sum()==0):
@@ -330,7 +405,7 @@ class LogisticUCB1(LogisticPolicy):
 			arm = np.reshape(arm_set[i,:], (-1,))
 			self.design_matrix_inv += -np.dot(self.design_matrix_inv, np.dot(np.outer(arm, arm), self.design_matrix_inv)) \
 				/ (1 + np.dot(arm, np.dot(self.design_matrix_inv, arm)))
-		return all_items[available_items_ids][ids_samples]
+		return all_items[available_items_ids][ids_samples].flatten()
 
 	## https://github.com/louisfaury/logistic_bandit/blob/master/logbexp/algorithms/logistic_ucb_1.py
 	def update_ucb_bonus(self):
@@ -394,7 +469,7 @@ class LinOASM(LogisticUCB1):
 				max_comb += candidates
 		return max_comb
 			
-	def predict(self, context, k, only_available=False):
+	def predict(self, context, k, only_available=True):
 		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
@@ -412,7 +487,7 @@ class LinOASM(LogisticUCB1):
 		# select arm
 		qis = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
 		ids_samples = self.sample(qis, k)
-		return all_items[available_items_ids][ids_samples]
+		return all_items[available_items_ids][ids_samples].flatten()
 		
 class LogisticRegression(Policy):
 	def __init__(self, info, random_state=1234):
@@ -433,7 +508,7 @@ class LogisticRegression(Policy):
 		self.model.partial_fit(X_user, Y_user, list(sorted(np.unique(Y_user.astype(int)))))
 		self.theta = self.model.coef_
 		
-	def predict(self, context, k, only_available=False):
+	def predict(self, context, k, only_available=True):
 		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
@@ -448,7 +523,7 @@ class LogisticRegression(Policy):
 		qis = qis[:,1].ravel()
 		# select arm
 		ids_samples = self.sample(qis, k)
-		return all_items[available_items_ids][ids_samples]
+		return all_items[available_items_ids][ids_samples].flatten()
 		
 	def update(self, context, rec_items, reward, div_intra, div_inter):
 		contexts = np.tile(context.reshape(1,-1), (rec_items.shape[0], 1))
@@ -494,7 +569,7 @@ class DiversityDPP(Custom):
 	def sample(self, qis, k):
 		'''
 		Samples according to the L-ensemble
-		where L = Phi.Phi^T
+		where L = Phi.Phi^T (only taking into account the features, not the predicted quality)
 		
 		Samples M subsets of size k at random
 		and returns the subset S that maximizes
@@ -504,6 +579,6 @@ class DiversityDPP(Custom):
 		_, Phi = self.get_L(qis)
 		L = Phi.dot(Phi.T)
 		self.DPP = FiniteDPP('likelihood', **{'L': L})
-		self.DPP.sample_exact_k_dpp(size=k)
+		self.DPP.sample_exact_k_dpp(size=k, random_state=self.random_state)
 		lst = self.DPP.list_of_samples[0]
-		return lst
+		return np.array(lst).flatten()

@@ -7,6 +7,7 @@ import yaml
 from joblib import Parallel, delayed, parallel_backend
 from multiprocessing import cpu_count
 from tqdm import trange
+import json
 import os
 
 from data import synthetic, movielens, SyntheticReward
@@ -18,7 +19,9 @@ with open('config.yml', 'r') as f:
 	params = yaml.safe_load(f)
 for param, v in params.items():
 	globals()[param] = v
-#assert k<=emb_dim
+with open(f"parameters_{params['exp_name']}.json", "w") as f:
+	json.dump(params, f, ensure_ascii=False)
+assert k<=emb_dim
 assert data_type in ["movielens","synthetic"]
 seed_everything(seed)
 
@@ -26,13 +29,13 @@ seed_everything(seed)
 if (data_type=="synthetic"):
 	ratings, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit)
 elif (data_type=="movielens"):
-	if (not os.path.exists("movielens_instance.pck")):
-		ratings, info, reward = movielens(nusers=None, nitems=None, nratings=None, ncategories=None, emb_dim=emb_dim, p_visit=p_visit, savename="movielens_instance.pck") 
+	if (not os.path.exists(f"movielens_instance_{params['exp_name']}.pck")):
+		ratings, info, reward = movielens(nratings=nratings, ncategories=ncategories, emb_dim=emb_dim,  emb_dim_user=emb_dim_user, p_visit=p_visit, savename=f"movielens_instance_{params['exp_name']}.pck") 
 	else:
-		with open("movielens_instance.pck", "rb") as f:
+		with open(f"movielens_instance_{params['exp_name']}.pck", "rb") as f:
 			di = pickle.load(f)
 		ratings, info, theta = [di[n] for n in ["ratings", "info", "theta"]]
-		reward = SyntheticReward(info["item_embeddings"], add_params=dict(theta=theta, item_categories=info["item_categories"], p_visit=p_visit))
+		reward = SyntheticReward(info["item_embeddings"].values, add_params=dict(theta=theta, item_categories=info["item_categories"].values, p_visit=p_visit))
 else:
 	raise ValueError(f"{data_type} is not implemented.")
 	
@@ -50,6 +53,8 @@ for policy in policies:
 
 ## 3. User scatter plots of UMAPs of item embeddings according to user feedback (non selected, selected, selected and liked, selected and disliked)
 plot_umap(info["item_embeddings"].values, results_traj, k, fig_title=f"{data_type}_figure2")
+
+exit() ##
 
 ## 4. Simulate the results from the policy
 seeds = np.random.choice(range(int(1e8)), size=niters)

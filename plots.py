@@ -24,11 +24,13 @@ def plot_umap(item_embs, results_traj, k, fontsize=15, n_neighbors=3, fig_title=
 		for t in range(horizon_traj):
 			item_lbs = item_labels[t]
 			item_lbs[results[t,:k].ravel()] = results[t,k:].ravel()
+			for tau in range(t):
+				item_lbs[results[tau,:k].ravel()] = -0.5
 			item_labels[t] = item_lbs
 			
 		fig, axes = plt.subplots(nrows=1, ncols=horizon_traj, figsize=(6.5*horizon_traj,6))
-		labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected"}
-		labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b"}
+		labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected", -0.5 :"seen"}
+		labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b", -0.5: "y"}
 		for t in range(horizon_traj):
 			for label in labels:
 				embs = embeddings[item_labels[t]==label,:]

@@ -12,10 +12,15 @@ conda clean -a -y
 
 ## Files
 
-- *policies.py*: contains the strategies to recommend a set of items
 - *data.py*: data generation
 - *main.py*: script to run the experiments
-- *tools.py*: implements pipelines 
+- *plots.py*: creates figures
+- *policies.py*: contains the strategies to recommend a set of items
+- *simulate.py*: implements pipelines 
+- *tools.py*: useful functions
+- *requirements.txt* dependencies
+- *README.md*
+- *config.yml*: configuration 
 
 ## Execute experiments
 

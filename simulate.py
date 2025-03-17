@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 from time import time
 import pickle
+from copy import deepcopy
 
 from policies import *
 from tools import *
@@ -60,7 +61,10 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			i_user = np.random.choice(range(user_contexts.shape[0]))
 			context = user_contexts[i_user].reshape(-1, 1)
 		
+		## 1. Oracle for the reward
 		rt_ids = reward.get_oracle_reward(context, k)
+		only_available = not (rt_ids is None)
+		rt_ids = reward.get_oracle_reward(context, k, only_available=only_available)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
 		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0])
@@ -75,11 +79,13 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		#results.update({"oracle reward": res})
 		best_reward = aggreg_func(means)
 		
-		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func)
+		## 2. Oracle for interbatch diversity
+		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func, only_available=only_available)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
 		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0]) ## true
-		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids) ## to get positive regret
+		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)  ## to get positive regret
+		div_intra = reward.get_diversity(rt, action_ids=rt_ids)
 		best_diversity_inter = aggreg_func(div_inter)
 		#res = results["oracle diversity"]
 		#res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
@@ -88,10 +94,12 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
 			print(f"At t={t}, InterDiversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
 		
-		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func, intra=True)
+		## 3. Oracle for intrabatch diversity
+		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func, intra=True, only_available=only_available)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)	
 		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])                  ## true
+		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)
 		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret
 		best_diversity_intra = aggreg_func(div_intra)
 		if (verbose):# or (t%int(horizon//10)==0)):
@@ -99,7 +107,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			print(f"At t={t}, IntraDiversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
 		
 		for policy in trained_policies:
-			rt_ids = policy.predict(context, k)
+			rt_ids = policy.predict(context, k, only_available=only_available)
 			rt = reward.item_embeddings[rt_ids,:]
 			yt = reward.get_reward(context, rt)
 			#div_inter = reward.get_diversity(rt[yt.flatten()>0,:], context=context, action_ids=rt_ids[yt.flatten()>0])
@@ -112,10 +120,11 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			dia = aggreg_func(div_intra)
 			die = aggreg_func(div_inter)
 			policy.update(context, rt, yt, div_intra, div_inter)
-			reg_reward = aggreg_func(reward.get_means(context, rt))
+			reg_reward = aggreg_func(reward.get_means(context, rt)) 
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
-			print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}") ## TODO
+			if (True): #(verbose):
+				print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}") 
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context.ravel()} (r={np.round(rrt,3)} (reward={np.round(reg_reward,3)}), dintra={np.round(dia,3)}, dinter={np.round(die,3)})")
 				
@@ -160,10 +169,9 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 	aggreg_func = choose_aggregation(aggreg)
 	
 	for t in tqdm(range(1,horizon+1), leave=False):
-		rt_ids = policy.predict(context, k, only_available=False)#True)
+		rt_ids = policy.predict(context, k, only_available=True)
 		if (rt_ids is None):
-			results = results[:(t-1),:]
-			return results
+			rt_ids = policy.predict(context, k, only_available=False)
 		results[t-1,:k] = rt_ids 
 		rt = reward.item_embeddings[rt_ids,:]
 		yt = reward.get_reward(context, rt)
@@ -186,9 +194,11 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 		policy = eval(policy_name)(info, random_state=random_seed)
 		policy.fit(ratings)
 
-		if (False):
-			user_context = context_int2array(get_context_from_rating(ratings[-1]), nitems)
-			rt_ids = policy.predict(user_context, k)
+		if (True): #(verbose):
+			user_context = context_int2array(get_context_from_rating(ratings[-1]), nitems).reshape(-1,1)
+			rt_ids = policy.predict(user_context, k, only_available=True)
+			if (rt_ids is None):
+				rt_ids = policy.predict(user_context, k, only_available=False)
 			rt = reward.item_embeddings[rt_ids,:]
 			yt = reward.get_reward(user_context, rt)
 			print(f"{policy_name}: User with initial context {get_context_from_rating(ratings[-1])} ({user_context.ravel()}) recommended items {rt_ids} with scores {np.mean(yt)}")	

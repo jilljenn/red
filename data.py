@@ -35,7 +35,7 @@ class Reward(object):
 		Parameters
 		item_embeddings : array of shape (N, d)
 			the item embeddings
-		add_params : dict
+		add_params : dict or None[default=None]
 			optional additional parameters
 		'''
 		self.item_embeddings = item_embeddings/np.linalg.norm(item_embeddings)
@@ -49,7 +49,7 @@ class Reward(object):
 		Parameters
 		context : array of shape (N, 1)
 			the feedback observed in the past
-		action_embeddings : array of shape (K, d) or None (default)
+		action_embeddings : array of shape (K, d) or None[default=None]
 			the action embeddings. If None, computed for all items
 			
 		---
@@ -87,10 +87,10 @@ class Reward(object):
 		Parameters
 		action_embeddings_positive : array of shape (K, d)
 			the action embeddings with positive feedback
-		context : array of shape (N, 1) or None (default)
+		context : array of shape (N, 1) or None[default=None]
 			the feedback observed in the past. If None, the 
 			diversity score is computed intrabatch (otherwise, interbatch)
-		action_ids : array of shape (K,) or None (default)
+		action_ids : array of shape (K,) or None[default=None]
 			the identifiers corresponding to the action embeddings
 			
 		---
@@ -100,7 +100,7 @@ class Reward(object):
 		'''
 		raise NotImplemented
 		
-	def get_oracle_diversity(self, context, K, aggreg_func=None, intra=False):
+	def get_oracle_diversity(self, context, K, aggreg_func=np.sum, intra=False, only_available=True):
 		'''
 		Obtains the optimal selection for the input context
 		with respect to the diversity score by greedily adding
@@ -113,22 +113,25 @@ class Reward(object):
 			the feedback observed in the past
 		K : int
 			the number of actions to select
-		aggreg_func : Python function
-			the aggregation function for diversity scores
-		intra : bool
+		aggreg_func : Python function [default=np.sum]
+			the aggregation function for diversity scores (since diversity depends on other items)
+		intra : bool [default=False]
 			computes the intrabatch diversity instead of 
 			interbatch diversity if set to True
+		only_available : return only unseen items if True
 			
 		---
 		Returns
-		pi : array of shape (K,)
-			the optimal diversity-wise selection for context
+		pi : array of shape (K,) or None
+			the optimal diversity-wise selection for context or None if all explored
 		'''
 		assert aggreg_func is not None
 		available_items_ids = np.zeros(context.shape).ravel() #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
+			if (only_available):
+				return None
 		available_items = self.item_embeddings[available_items_ids,:]
 		pi = []
 		for k in range(K): ## build the oracle greedily as (we hope that) the diversity function is submodular
@@ -147,10 +150,10 @@ class Reward(object):
 		pi = all_items[available_items_ids][np.array(pi)]
 		return pi
 		
-	def get_oracle_reward(self, context, K):
+	def get_oracle_reward(self, context, K, only_available=True):
 		'''
 		Obtains the optimal selection for the input context
-		with respect to the reward 
+		with respect to the expected reward/mean
 		That is, recommend the K items with top expected rewards
 		for that context
 		
@@ -160,16 +163,19 @@ class Reward(object):
 			the feedback observed in the past
 		K : int
 			the number of actions to select
+		only_available : return only unseen items if True
 			
 		---
 		Returns
-		pi : array of shape (K,)
-			the optimal reward-wise selection for context
+		pi : array of shape (K,) or None
+			the optimal reward-wise selection for context or None if all explored
 		'''
 		available_items_ids = np.zeros(context.shape).ravel() #get_available_actions(context)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
+			if (only_available):
+				return None
 		available_items = self.item_embeddings[available_items_ids,:]
 		vals = self.get_means(context, available_items).flatten().tolist()
 		all_items = np.arange(available_items_ids.shape[0])
@@ -183,7 +189,7 @@ class Reward(object):
 class SyntheticReward(Reward):
 	def __init__(self, item_embeddings, add_params=dict(theta=None, item_categories=None, p_visit=0.9)):
 		'''
-		Logistic model of rewards with Gaussian noise
+		Logistic model of rewards with one-dimensional Bernouilli noise
 		
 		---
 		Parameters
@@ -191,9 +197,9 @@ class SyntheticReward(Reward):
 			the item embeddings
 		add_params : dict
 			contains 
-			theta : array of shape (r, 1), e.g., r=d+N if f_mix is the concatenation 
+			theta : array of shape (r, 1), e.g., r=d+N if f_mix is the concatenation
 				the coefficients of the linear model
-			item_categories : array of shape (N, C)
+			item_categories : array of shape (N, C) 
 				the item categories (binary matrix)
 			p_visit : float
 				the probability of visiting an item
@@ -236,7 +242,7 @@ class SyntheticReward(Reward):
 		reward = np.zeros((K,))
 		p_visits = np.random.choice([0,1], p=[1-self.p_visit, self.p_visit], size=(K,))
 		for k in range(K):
-			p_book = np.random.choice([0,1], p=[1-ps[k], ps[k]])
+			p_book = np.random.choice([0,1], p=[ps[k], 1-ps[k]])
 			reward[k] = p_visits[k] * (-1)**p_book
 			assert reward[k] in [-1, 0, 1]
 		return reward.astype(int)
@@ -350,7 +356,7 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 		## Get reward
 		rat = 0
 		while (rat == 0): ## avoid rewards = 0 as all items here are supposed to be visited here
-			rat = int(reward.get_reward(contexts[u], item_embeddings[i].reshape(1,-1)))
+			rat = reward.get_reward(contexts[u], item_embeddings[i].reshape(1,-1))[0]
 		bin_context = context_array2int(contexts[u].flatten(), m)
 		bin_cats = "".join(list(map(lambda x : str(int(x)), item_categories[i])))
 		ratings[nrat] = [u, i, int(npulls[u,i]), bin_cats, bin_context, rat]
@@ -747,8 +753,8 @@ if __name__=="__main__":
 	emb_dim_user=11
 	p_visit=0.9
 	print("_"*27)
-	if (False):
-		print("SYNTHETIC")
+	if (True):
+		print("* SYNTHETIC")
 		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit)
 		print("Ratings")
 		print(ratings_.shape)
@@ -769,7 +775,7 @@ if __name__=="__main__":
 		print(reward.get_means(context, action_emb))
 		print("_"*27)
 	if (True): 
-		print("MOVIELENS")
+		print("* MOVIELENS")
 		if (not os.path.exists("movielens_instance.pck")):
 			ratings_, info, reward = movielens(nratings=None, ncategories=None, emb_dim=8, p_visit=p_visit, savename="movielens_instance.pck")
 		else:
