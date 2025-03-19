@@ -203,7 +203,7 @@ class Custom(LogisticPolicy):
 		self.clean()
 			
 	def predict(self, context, k, only_available=True):
-		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
@@ -217,22 +217,22 @@ class Custom(LogisticPolicy):
 		if (np.max(qis)!=0):
 			qis /= np.max(qis)                      ## rescale values for numerical approximations
 		qis[qis<=0] = np.min(qis[qis>0])/2 if (qis>0).any() else 0.1  ## positive scores
-		ids_samples = self.sample(qis, k)
+		ids_samples = self.sample(qis, k, np.argwhere(available_items_ids==1).ravel())
 		assert len(ids_samples)==k
 		return all_items[available_items_ids][ids_samples].flatten()
 		
-	def sample(self, qis, k):
-		return np.argsort(list(qis))[-k:]
+	def sample(self, qis, k, available_items_ids_lst):
+		return np.argsort(list(qis[available_items_ids]))[-k:]
 		
 	def compute_qdd(self, qis, S):
-		quality = np.prod(qis[S])**(2*self.alpha)
+		quality = np.prod(qis)**(2*self.alpha) #np.prod(qis[S])**(2*self.alpha)
 		Phi = self.item_embeddings.values[S,:]
 		diversity = np.linalg.det(Phi.dot(Phi.T))
 		score = quality * diversity
 		return score
 		
 	def get_L(self, qis, S=None):
-		quality = np.power(qis if (S is None) else qis[S], self.alpha)
+		quality = np.power(qis, self.alpha) #np.power(qis if (S is None) else qis[S], self.alpha)
 		Q = np.diag(quality.flatten())
 		Phi = self.item_embeddings.values if (S is None) else self.item_embeddings.values[S,:] 
 		return [Q, Phi]
@@ -243,7 +243,7 @@ class CustomBruteForce(Custom):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "CustomBruteForce"
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Iterate over all k-sized subsets of items and 
 		return the k-sized subset S that maximizes 
@@ -255,7 +255,7 @@ class CustomBruteForce(Custom):
 		all_combs = itertools.combinations(list(range(len(qis))), k)
 		max_val, max_comb = -float("inf"), None
 		for comb in all_combs:
-			score = self.compute_qdd(qis, list(comb))
+			score = self.compute_qdd(qis, available_items_ids_lst[list(comb)])
 			if (score > max_val):
 				max_comb = list(comb)
 		return max_comb
@@ -266,7 +266,7 @@ class CustomGreedy(Custom):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "CustomGreedy"
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Recursively adds items to the subset
 		until it is of size k
@@ -277,7 +277,7 @@ class CustomGreedy(Custom):
 		'''
 		max_comb = []
 		while True:
-			all_scores = [self.compute_qdd(qis, max_comb+[j]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
+			all_scores = [self.compute_qdd(qis, [available_items_ids_lst[x] for x in max_comb]+[available_items_ids_lst[j]]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
 			if (np.max(all_scores)==-float("inf")):
 				break
 			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
@@ -295,7 +295,7 @@ class CustomSampling(Custom):
 		self.name = "CustomSampling"
 		self.M = M
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Samples M subsets of size k at random
 		and returns the subset S that maximizes
@@ -306,7 +306,7 @@ class CustomSampling(Custom):
 		test_combs = [np.random.choice(range(len(qis)), p=None, replace=False, size=k).ravel().tolist() for _ in range(self.M)]
 		max_val, max_comb = -float("inf"), None
 		for comb in test_combs:
-			score = self.compute_qdd(qis, list(comb))
+			score = self.compute_qdd(qis, available_items_ids_lst[list(comb)].tolist())
 			if (score > max_val):
 				max_comb = comb
 		return max_comb
@@ -318,7 +318,7 @@ class CustomDPP(Custom):
 		self.name = "CustomDPP"
 		self.DPP = None
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Samples according to the L-ensemble
 		where L = Q.Phi.Phi^T.Q
@@ -329,7 +329,7 @@ class CustomDPP(Custom):
 		where Q is the diagonal matrix of positive quality scores
 		and Phi is the item embedding matrix 
 		'''
-		Q, Phi = self.get_L(qis)
+		Q, Phi = self.get_L(qis, available_items_ids_lst)
 		K = Q.dot(Phi)
 		L = K.dot(K.T)
 		self.DPP = FiniteDPP('likelihood', **{'L': L})
@@ -350,7 +350,7 @@ class EpsilonGreedy(LogisticPolicy):
 		self.clean()
 			
 	def predict(self, context, k, only_available=True):
-		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
@@ -382,7 +382,7 @@ class LogisticUCB1(LogisticPolicy_MLEFaury2020):
 			
 	def predict(self, context, k, only_available=True):
 		## Returns k arms at a time /!\ select iteratively the arm to play
-		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
@@ -470,7 +470,7 @@ class LinOASM(LogisticUCB1):
 		return max_comb
 			
 	def predict(self, context, k, only_available=True):
-		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
@@ -509,7 +509,7 @@ class LogisticRegression(Policy):
 		self.theta = self.model.coef_
 		
 	def predict(self, context, k, only_available=True):
-		available_items_ids = np.zeros(context.shape[0], dtype=bool) #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, 1)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)

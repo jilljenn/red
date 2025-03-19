@@ -9,7 +9,7 @@ from tools import *
 from policies import colors
 
 def plot_umap(item_embs, results_traj, k, fontsize=15, n_neighbors=3, fig_title="figure2"):
-	dimred_args = dict(n_neighbors=n_neighbors, min_dist=0.5, metric="euclidean")
+	dimred_args = dict(n_neighbors=n_neighbors, min_dist=0.5, metric="euclidean", random_state=42)
 	with np.errstate(invalid="ignore"): # for NaN or 0 variance matrices
 		umap_model = umap.UMAP(**dimred_args)
 		with warnings.catch_warnings():
@@ -25,19 +25,22 @@ def plot_umap(item_embs, results_traj, k, fontsize=15, n_neighbors=3, fig_title=
 			item_lbs = item_labels[t]
 			item_lbs[results[t,:k].ravel()] = results[t,k:].ravel()
 			for tau in range(t):
-				item_lbs[results[tau,:k].ravel()] = -0.5
+				item_lbs[results[tau,:k].ravel()] = 0.26 * np.sign(item_lbs[results[tau,:k].ravel()]-0.5) + 0.25
+			assert np.sum(np.vectorize(lambda x : x in [1,-1,0,-0.01,0.51])(item_lbs))==k
 			item_labels[t] = item_lbs
 			
 		fig, axes = plt.subplots(nrows=1, ncols=horizon_traj, figsize=(6.5*horizon_traj,6))
-		labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected", -0.5 :"seen"}
-		labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b", -0.5: "y"}
+		labels = {-1: "selected/disliked", 1: "selected/liked", 0: "selected/not visited", 0.5: "non selected", 0.25 :"seen", -0.01: "seen/disliked", 0.51: "seen/liked"}
+		labels_colors = {-1: "r", 1: "g", 0: "k", 0.5: "b", 0.25: "y", -0.01: "m", 0.51: "c"}
 		for t in range(horizon_traj):
-			for label in labels:
+			nlab = 0
+			for label in list(sorted(list(labels.keys()))):
 				embs = embeddings[item_labels[t]==label,:]
 				if (embs.shape[0]==0):
 					continue
-				axes[t].scatter(embs[:,0], embs[:,1], s=200, c=labels_colors[label], marker=".", alpha=0.05 if (label == 0.5) else 0.8, label=labels[label])
-			axes[t].set_title(f"Round {t+1}: context {pretty_print_context(contexts[t])[:10]}"+("..." if (len(contexts[t])>10) else ""), fontsize=fontsize)
+				nlab += 1
+				axes[t].scatter(embs[:,0], embs[:,1], s=200, c=labels_colors[label], marker=".", alpha=0.05 if (label == 0.5) else 0.8, label=labels[label]+(f" {embs.shape[0]}" if (label!=0.5) else f" k={k}"))
+			axes[t].set_title(f"Round {t+1}: context {pretty_print_context(contexts[t])[:18]}"+("..." if (len(contexts[t])>10) else ""), fontsize=fontsize)
 			if (t==0):
 				axes[t].set_ylabel("UMAP C2", fontsize=fontsize)
 			axes[t].set_xlabel("UMAP C1", fontsize=fontsize)
@@ -45,8 +48,9 @@ def plot_umap(item_embs, results_traj, k, fontsize=15, n_neighbors=3, fig_title=
 			axes[t].set_xticks(axes[t].get_xticks())
 			axes[t].set_xticklabels(axes[t].get_xticklabels(), fontsize=fontsize)
 			axes[t].set_yticklabels(axes[t].get_yticklabels(), fontsize=fontsize)
-			if (t==0):
-				axes[t].legend(fontsize=fontsize)
+			#if (t==0):
+			#	axes[t].legend(fontsize=fontsize)
+			axes[t].legend(fontsize=fontsize, loc='upper center', bbox_to_anchor=(0.5, -0.1), fancybox=True, shadow=False)#, ncol=nlab)
 		plt.savefig(f"{fig_title}_{policy_name}.png", bbox_inches="tight")
 		plt.close()
 		

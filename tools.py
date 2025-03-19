@@ -14,7 +14,7 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     #torch.use_deterministic_algorithms(True)
     
-pretty_print_context = lambda c : ''.join(list(map(lambda x : str(int(x)),c)))
+pretty_print_context = lambda c : ','.join(list(map(lambda x : str(int(x)),c)))
     
 def get_context_from_rating(rating):
 	return rating[4]

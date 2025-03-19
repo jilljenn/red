@@ -62,15 +62,15 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			context = user_contexts[i_user].reshape(-1, 1)
 		
 		## 1. Oracle for the reward
-		rt_ids = reward.get_oracle_reward(context, k)
+		rt_ids = reward.get_oracle_reward(context, k, only_available=True)
 		only_available = not (rt_ids is None)
 		rt_ids = reward.get_oracle_reward(context, k, only_available=only_available)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
 		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0])
 		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])
-		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)
-		div_intra = reward.get_diversity(rt, action_ids=rt_ids)
+		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids) 
+		div_intra = reward.get_diversity(rt, action_ids=rt_ids) 
 		r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
 		if (verbose):# or (t%int(horizon//10)==0)):
 			print(f"At t={t}, Reward Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
@@ -84,7 +84,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
 		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0]) ## true
-		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)  ## to get positive regret
+		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)  ## to get positive regret: given context, what (deterministic) action is best
 		div_intra = reward.get_diversity(rt, action_ids=rt_ids)
 		best_diversity_inter = aggreg_func(div_inter)
 		#res = results["oracle diversity"]
@@ -100,7 +100,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		means = reward.get_means(context, rt)	
 		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])                  ## true
 		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)
-		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret
+		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret: given context, what (deterministic) action is best
 		best_diversity_intra = aggreg_func(div_intra)
 		if (verbose):# or (t%int(horizon//10)==0)):
 			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
@@ -124,7 +124,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
 			if (True): #(verbose):
-				print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}") 
+				print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}\t||theta||_2={float(np.linalg.norm(policy.theta, 2))}") 
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context.ravel()} (r={np.round(rrt,3)} (reward={np.round(reg_reward,3)}), dintra={np.round(dia,3)}, dinter={np.round(die,3)})")
 				
@@ -136,7 +136,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		
 	return results
 	
-def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=False, aggreg="sum"):
+def simulate_trajectory(k, horizon, policy, reward, context, gamma=1.0, verbose=False, aggreg="sum", only_available=True):
 	'''
 	Simulate a trajectory from an initial user context
 	
@@ -169,7 +169,7 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 	aggreg_func = choose_aggregation(aggreg)
 	
 	for t in tqdm(range(1,horizon+1), leave=False):
-		rt_ids = policy.predict(context, k, only_available=True)
+		rt_ids = policy.predict(context, k, only_available=only_available)
 		if (rt_ids is None):
 			rt_ids = policy.predict(context, k, only_available=False)
 		results[t-1,:k] = rt_ids 
@@ -180,7 +180,7 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1., verbose=F
 		
 		## update context
 		cc = context.ravel().copy()
-		context[rt_ids,:] += yt.reshape(-1,1)
+		context[rt_ids,:] += yt.reshape(-1,1)*gamma**t ## important to get gamma!=1
 		contexts.append(context.copy())
 		if (verbose):# or (t%int(horizon//10)==0)):
 			print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {pretty_print_context(cc)} -> {pretty_print_context(context.ravel())} (aggregated reward={np.round(rrt,3)})")
@@ -194,7 +194,7 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 		policy = eval(policy_name)(info, random_state=random_seed)
 		policy.fit(ratings)
 
-		if (True): #(verbose):
+		if (verbose):
 			user_context = context_int2array(get_context_from_rating(ratings[-1]), nitems).reshape(-1,1)
 			rt_ids = policy.predict(user_context, k, only_available=True)
 			if (rt_ids is None):
@@ -210,7 +210,7 @@ def single_run(policies, info, ratings, nitems, k, horizon, reward, prob_new_use
 	runtime = time()-stime
 	return results
 
-def single_trajectory(policy_name, info, ratings, k, horizon, reward, gamma=1., context=None, verbose=False, random_seed=13234):
+def single_trajectory(policy_name, info, ratings, k, horizon, reward, gamma=1., context=None, verbose=False, random_seed=13234, only_available=True):
 	seed_everything(int(random_seed))
 	nitems = info["item_embeddings"].shape[0]
 	if (context is None):
@@ -221,7 +221,7 @@ def single_trajectory(policy_name, info, ratings, k, horizon, reward, gamma=1., 
 	policy.fit(ratings)
 	
 	stime = time()
-	results, contexts = simulate_trajectory(k, horizon, policy, reward, context=context, gamma=gamma, verbose=verbose)
+	results, contexts = simulate_trajectory(k, horizon, policy, reward, context=context, gamma=gamma, verbose=verbose, only_available=only_available)
 	runtime = time()-stime
 	return results, contexts
 	

@@ -1,23 +1,24 @@
-nusers: 10       ## number of users
+nusers: 5       ## number of users
 nitems: 1000      ## number of items
-nratings: 2500   ## number of ratings
-ncategories: 150   ## number of item categories
-exp_name: "movielens2500"
-data_type: "movielens"
+nratings: 500   ## number of ratings
+ncategories: 2   ## number of item categories
+exp_name: "synthetic_verysmall"
+data_type: "synthetic"
 policies: ["CustomDPP"]
 #["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression"] #"CustomBruteForce",
 emb_dim: 100      ## item embedding size
-emb_dim_user: 2  ## user embeddings size
+emb_dim_user: 5  ## user embeddings size
 
-k: 2             ## number of items to sample at each time
+k: 10            ## number of items to sample at each time
 seed: 1111       ## random seed
 horizon: 10      ## recommendation rounds
 p_visit: 1.0
 
 niters: 3        ## number of iterations
 njobs: 1         ## number of parallel jobs
-gamma: 1.0       ## discounting factor for the time
+gamma: 1.1       ## discounting factor for the time: do not choose gamma=1. otherwise actions might cancel themselves
 prob_new_user: 0.3
 verbose: false
+only_available: true
 
 horizon_traj: 10
