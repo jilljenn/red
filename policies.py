@@ -124,7 +124,7 @@ class LogisticPolicy_MLEFaury2020(Policy):
 ## Online Mirror Descent: Zhang, Y. J., & Sugiyama, M. (2024). Online (multinomial) logistic bandit: Improved regret and constant computation cost. Advances in Neural Information Processing Systems, 36.
 ## Lee, J., & Oh, M. H. (2024). Nearly minimax optimal regret for multinomial logistic bandit. arXiv preprint arXiv:2405.09831.
 ## Lower computational and storage cost
-class LogisticPolicy(LogisticPolicy_MLEFaury2020):
+class LogisticPolicy(LogisticPolicy_MLEFaury2020): 
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, reg_eta=0.01):
 		super().__init__(info, random_state, max_steps, lazy_update_fr)
 		self.reg_eta = reg_eta
@@ -190,7 +190,7 @@ class LogisticPolicy(LogisticPolicy_MLEFaury2020):
 ########################
 
 ## Super class implementing the underlying reward model
-class Custom(LogisticPolicy):
+class Custom(LogisticPolicy): ## CHECKED (debugged)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr)
 		self.name = "Custom"
@@ -218,16 +218,16 @@ class Custom(LogisticPolicy):
 		if (np.max(qis)!=0):
 			qis /= np.max(qis)                      ## rescale values for numerical approximations
 		qis[qis<=0] = np.min(qis[qis>0])/2 if (qis>0).any() else 0.1  ## positive scores
-		ids_samples = self.sample(qis, k, np.argwhere(available_items_ids==1).ravel())
+		ids_samples = self.sample(qis, k, all_items)
 		assert len(ids_samples)==k
 		return all_items[ids_samples].flatten()
 		
 	def sample(self, qis, k, available_items_ids_lst):
-		return np.argsort(list(qis[available_items_ids]))[-k:]
+		return np.argsort(qis[available_items_ids].ravel())[-k:].tolist()
 		
 	def compute_qdd(self, qis, S):
-		quality = np.prod(qis)**(2*self.alpha) #np.prod(qis[S])**(2*self.alpha)
-		Phi = self.item_embeddings.values[S,:]
+		quality = np.prod(qis)**(2*self.alpha) #np.prod(qis[S.ravel()])**(2*self.alpha): S is a subset, qis is already computed on the subset
+		Phi = self.item_embeddings.values if (S is None) else self.item_embeddings.values[S.ravel(),:] 
 		diversity = np.linalg.det(Phi.dot(Phi.T))
 		score = quality * diversity
 		return score
@@ -239,7 +239,7 @@ class Custom(LogisticPolicy):
 		return [Q, Phi]
 	
 ## Find K maximizers using brute force	
-class CustomBruteForce(Custom):
+class CustomBruteForce(Custom): ## CHECKED (debugged)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "CustomBruteForce"
@@ -259,10 +259,11 @@ class CustomBruteForce(Custom):
 			score = self.compute_qdd(qis, available_items_ids_lst[list(comb)])
 			if (score > max_val):
 				max_comb = list(comb)
+				max_val = score
 		return max_comb
 	
 ## Find K maximizers using greedy	
-class CustomGreedy(Custom):
+class CustomGreedy(Custom): ## UNCHECKED (TODO)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "CustomGreedy"
@@ -272,13 +273,13 @@ class CustomGreedy(Custom):
 		Recursively adds items to the subset
 		until it is of size k
 		Added item a is argmax of the score
-		Pi_{i in S+[a]} q[i]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T)
+		Pi_{i in S+[a]} q[i]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T) (which is *not* a submodular function...)
 		where q[i] is the positive quality score for i
 		and Phi_{S} is the embedding matrix restricted to indices in S 
 		'''
 		max_comb = []
 		while True:
-			all_scores = [self.compute_qdd(qis, [available_items_ids_lst[x] for x in max_comb]+[available_items_ids_lst[j]]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
+			all_scores = [self.compute_qdd(qis, available_items_ids_lst[max_comb+[j]]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
 			if (np.max(all_scores)==-float("inf")):
 				break
 			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
@@ -290,7 +291,7 @@ class CustomGreedy(Custom):
 		return max_comb
 
 ## Find K maximizers sampling M sets at random
-class CustomSampling(Custom):
+class CustomSampling(Custom): ## UNCHECKED (TODO)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1., M=10):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "CustomSampling"
@@ -307,13 +308,14 @@ class CustomSampling(Custom):
 		test_combs = [np.random.choice(range(len(qis)), p=None, replace=False, size=k).ravel().tolist() for _ in range(self.M)]
 		max_val, max_comb = -float("inf"), None
 		for comb in test_combs:
-			score = self.compute_qdd(qis, available_items_ids_lst[list(comb)].tolist())
+			score = self.compute_qdd(qis, available_items_ids_lst[comb].tolist())
 			if (score > max_val):
 				max_comb = comb
+				max_val = score
 		return max_comb
 
 ## Find K maximizers using a DPP
-class CustomDPP(Custom):
+class CustomDPP(Custom): ## UNCHECKED (TODO)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "CustomDPP"
@@ -343,7 +345,7 @@ class CustomDPP(Custom):
 ########################
 
 ## Returns random items with probability epsilon, otherwise chooses those with highest estimated expected reward
-class EpsilonGreedy(LogisticPolicy):
+class EpsilonGreedy(LogisticPolicy): ## CHECKED (debugged)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, epsilon=0.1):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr)
 		self.name = "EpsilonGreedy"
@@ -370,7 +372,7 @@ class EpsilonGreedy(LogisticPolicy):
 		return all_items[ids_samples].flatten()
 		
 ## LogisticUCB-1 from Faury et al, 2020 https://arxiv.org/pdf/2002.07530
-class LogisticUCB1(LogisticPolicy_MLEFaury2020):
+class LogisticUCB1(LogisticPolicy_MLEFaury2020): ## UNCHECKED (TODO)
 	def __init__(self, info, max_steps=5, lazy_update_fr=5, random_state=1234):
 		super().__init__(info, max_steps=max_steps, lazy_update_fr=lazy_update_fr, random_state=random_state)
 		self.name = "LogisticUCB1"
@@ -437,7 +439,7 @@ class LogisticUCB1(LogisticPolicy_MLEFaury2020):
 		bonus = ucb_bonus * norm
 		return pred_reward + bonus
 		
-class LinOASM(LogisticUCB1):
+class LinOASM(LogisticUCB1): ## UNCHECKED (TODO)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, lbd=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr)
 		self.name = "LinOASM"
@@ -450,7 +452,7 @@ class LinOASM(LogisticUCB1):
 		score = qi * diversity
 		return score
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Recursively adds items to the subset
 		until it is of size k
@@ -461,7 +463,7 @@ class LinOASM(LogisticUCB1):
 		'''
 		max_comb = []
 		while True:
-			all_scores = [self.compute_qdd(qis[j], max_comb+[j]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
+			all_scores = [self.compute_qdd(qis[j], [available_items_ids_lst[i] for i in max_comb]+[available_items_ids_lst[j]]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
 			if (np.max(all_scores)==-float("inf")):
 				break
 			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
@@ -490,10 +492,10 @@ class LinOASM(LogisticUCB1):
 		ucb_bonus = self.update_ucb_bonus()
 		# select arm
 		qis = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
-		ids_samples = self.sample(qis, k)
+		ids_samples = self.sample(qis, k, np.argwhere(available_items_ids==1).ravel())
 		return all_items[ids_samples].flatten()
 		
-class LogisticRegression(Policy):
+class LogisticRegression(Policy): ## UNCHECKED (TODO)
 	def __init__(self, info, random_state=1234):
 		super().__init__(info, random_state=random_state)
 		self.name = "LogisticRegression"
@@ -527,7 +529,7 @@ class LogisticRegression(Policy):
 		qis = self.model.predict_proba(X_user)#.ravel()
 		qis = qis[:,1].ravel()
 		# select arm
-		ids_samples = self.sample(qis, k)
+		ids_samples = self.sample(qis, k, all_items)
 		return all_items[ids_samples].flatten()
 		
 	def update(self, context, rec_items, reward, div_intra, div_inter):
@@ -543,7 +545,7 @@ class LogisticRegression(Policy):
 		score = qi * diversity
 		return score
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Recursively adds items to the subset
 		until it is of size k
@@ -554,7 +556,7 @@ class LogisticRegression(Policy):
 		'''
 		max_comb = []
 		while True:
-			all_scores = [self.compute_qdd(qis[j], max_comb+[j]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
+			all_scores = [self.compute_qdd(qis[j], [available_items_ids_lst[i] for i in max_comb]+[available_items_ids_lst[j]]) if (j not in max_comb) else -float("inf") for j in range(len(qis))]
 			if (np.max(all_scores)==-float("inf")):
 				break
 			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
@@ -565,13 +567,13 @@ class LogisticRegression(Policy):
 				max_comb += candidates
 		return max_comb
 		
-class DiversityDPP(Custom):
+class DiversityDPP(Custom): ## UNCHECKED (TODO)
 	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, alpha=1.):
 		super().__init__(info, random_state=random_state, max_steps=max_steps, lazy_update_fr=lazy_update_fr, alpha=alpha)
 		self.name = "DiversityDPP"
 		self.DPP = None
 		
-	def sample(self, qis, k):
+	def sample(self, qis, k, available_items_ids_lst):
 		'''
 		Samples according to the L-ensemble
 		where L = Phi.Phi^T (only taking into account the features, not the predicted quality)
@@ -581,7 +583,7 @@ class DiversityDPP(Custom):
 		det(Phi_{S+[a]}Phi_{S+[a]}^T)
 		where Phi is the item embedding matrix 
 		'''
-		_, Phi = self.get_L(qis)
+		_, Phi = self.get_L(qis, available_items_ids_lst)
 		L = Phi.dot(Phi.T)
 		self.DPP = FiniteDPP('likelihood', **{'L': L})
 		self.DPP.sample_exact_k_dpp(size=k, random_state=self.random_state)
