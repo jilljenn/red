@@ -96,7 +96,7 @@ class LogisticPolicy_MLEFaury2020(Policy):
 		## we perform a few steps of a Newton's descent to solve the problem in Equation 8 (in LogisticUCB-1)
 		for i in range(rec_items.shape[0]):
 			arm = self.f_mix(rec_items[i,:].reshape(1,-1), context.reshape(1, -1))
-			if (reward[i]==0):    ##
+			if (reward[i]==0):    ## ignore non visited rewards
 				return None   ##
 			self.arms.append(arm.ravel())
 			self.rewards.append((reward[i]+1)/2)
@@ -149,7 +149,7 @@ class LogisticPolicy(LogisticPolicy_MLEFaury2020):
 		---
 		Returns
 		H : array of shape (N,N)
-			the inverse of matrix A+xy^T
+			the inverse of matrix A^{-1}+xy^T
 		'''
 		if (y is None):
 			y = x
@@ -210,7 +210,8 @@ class Custom(LogisticPolicy):
 			if (only_available):
 				return None
 		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel() 
+		#all_items = np.arange(available_items_ids.shape[0])
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		qis = X_user.dot(self.theta)            ## only the individual qi's for available items
@@ -219,7 +220,7 @@ class Custom(LogisticPolicy):
 		qis[qis<=0] = np.min(qis[qis>0])/2 if (qis>0).any() else 0.1  ## positive scores
 		ids_samples = self.sample(qis, k, np.argwhere(available_items_ids==1).ravel())
 		assert len(ids_samples)==k
-		return all_items[available_items_ids][ids_samples].flatten()
+		return all_items[ids_samples].flatten()
 		
 	def sample(self, qis, k, available_items_ids_lst):
 		return np.argsort(list(qis[available_items_ids]))[-k:]
@@ -357,15 +358,16 @@ class EpsilonGreedy(LogisticPolicy):
 			if (only_available):
 				return None
 		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel() 
+		#all_items = np.arange(available_items_ids.shape[0])
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		qis = X_user.dot(self.theta)     ## only the individual qi's for available items
-		ids_samples = np.argsort(qis)[-k:]
-		eps = np.random.choice([False,True], p=[1-self.epsilon, self.epsilon], size=k)
-		if (np.sum(eps)>0):
-			ids_samples[eps] = np.random.choice([i for i in range(len(qis)) if (i not in ids_samples)], p=None, size=np.sum(eps))
-		return all_items[available_items_ids][ids_samples].flatten()
+		ids_samples = np.argsort(qis.ravel())[-k:]
+		eps = np.random.choice([False,True], p=[1-self.epsilon, self.epsilon], size=k).ravel()
+		if (np.sum(eps)>0): ## not in ids_samples for diversity
+			ids_samples[eps] = np.random.choice([i for i in range(len(qis)) if (i not in ids_samples)], p=None, replace=False, size=np.sum(eps))
+		return all_items[ids_samples].flatten()
 		
 ## LogisticUCB-1 from Faury et al, 2020 https://arxiv.org/pdf/2002.07530
 class LogisticUCB1(LogisticPolicy_MLEFaury2020):
@@ -389,7 +391,8 @@ class LogisticUCB1(LogisticPolicy_MLEFaury2020):
 			if (only_available):
 				return None
 		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.arange(available_items_ids.shape[0])
+		#all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel() 
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		arm_set = np.array(X_user)
@@ -405,7 +408,7 @@ class LogisticUCB1(LogisticPolicy_MLEFaury2020):
 			arm = np.reshape(arm_set[i,:], (-1,))
 			self.design_matrix_inv += -np.dot(self.design_matrix_inv, np.dot(np.outer(arm, arm), self.design_matrix_inv)) \
 				/ (1 + np.dot(arm, np.dot(self.design_matrix_inv, arm)))
-		return all_items[available_items_ids][ids_samples].flatten()
+		return all_items[ids_samples].flatten()
 
 	## https://github.com/louisfaury/logistic_bandit/blob/master/logbexp/algorithms/logistic_ucb_1.py
 	def update_ucb_bonus(self):
@@ -477,7 +480,8 @@ class LinOASM(LogisticUCB1):
 			if (only_available):
 				return None
 		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel() 
+		#all_items = np.arange(available_items_ids.shape[0])
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		arm_set = np.array(X_user)
@@ -487,7 +491,7 @@ class LinOASM(LogisticUCB1):
 		# select arm
 		qis = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
 		ids_samples = self.sample(qis, k)
-		return all_items[available_items_ids][ids_samples].flatten()
+		return all_items[ids_samples].flatten()
 		
 class LogisticRegression(Policy):
 	def __init__(self, info, random_state=1234):
@@ -516,14 +520,15 @@ class LogisticRegression(Policy):
 			if (only_available):
 				return None
 		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel() 
+		#all_items = np.arange(available_items_ids.shape[0])
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		qis = self.model.predict_proba(X_user)#.ravel()
 		qis = qis[:,1].ravel()
 		# select arm
 		ids_samples = self.sample(qis, k)
-		return all_items[available_items_ids][ids_samples].flatten()
+		return all_items[ids_samples].flatten()
 		
 	def update(self, context, rec_items, reward, div_intra, div_inter):
 		contexts = np.tile(context.reshape(1,-1), (rec_items.shape[0], 1))

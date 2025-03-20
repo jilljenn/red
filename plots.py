@@ -23,9 +23,19 @@ def plot_umap(item_embs, results_traj, k, fontsize=15, n_neighbors=3, fig_title=
 		item_labels = {t: 0.5*np.ones(item_embs.shape[0]) for t in range(horizon_traj)}
 		for t in range(horizon_traj):
 			item_lbs = item_labels[t]
-			item_lbs[results[t,:k].ravel()] = results[t,k:].ravel()
+			X = np.isnan(results[t,:k].ravel())
+			if (X.any()):
+				kk = min(k,np.min(np.argwhere(X)))
+			else:
+				kk = k
+			item_lbs[results[t,:kk].ravel().astype(int)] = results[t,k:(k+kk)].ravel()
 			for tau in range(t):
-				item_lbs[results[tau,:k].ravel()] = 0.26 * np.sign(item_lbs[results[tau,:k].ravel()]-0.5) + 0.25
+				X = np.isnan(results[tau,:k].ravel())
+				if (X.any()):
+					kk = min(k,np.min(np.argwhere(X)))
+				else:
+					kk = k
+				item_lbs[results[tau,:kk].ravel().astype(int)] = 0.26 * np.sign(item_lbs[results[tau,:kk].ravel().astype(int)]-0.5) + 0.25
 			assert np.sum(np.vectorize(lambda x : x in [1,-1,0,-0.01,0.51])(item_lbs))==k
 			item_labels[t] = item_lbs
 			
@@ -85,10 +95,13 @@ def plot_regret(results_list, policies_names, horizon, fontsize=30, figsize=(40,
 			#LB_CI = np.array([float(wilson(m, nsim)[0]) for m in average.flatten().tolist()])
 			#UB_CI = np.array([float(wilson(m, nsim)[1]) for m in average.flatten().tolist()])
 			LB_CI = average.ravel() - std.ravel()
-			#if (i != 1):
-			#	LB_CI = np.maximum(LB_CI, 0)
 			UB_CI = average.ravel() + std.ravel()
+			if (i != 1):
+				LB_CI = np.maximum(LB_CI, 0)
 			axes[i].fill_between(x.ravel(), LB_CI, UB_CI, alpha=0.2, color=colors[policy_name])
+			axes[i].set_xlim((0, horizon))
+			if (i!=1):
+				axes[i].set_ylim(bottom=0)
 			axes[i].set_yticks(axes[i].get_yticks())
 			axes[i].set_xticks(axes[i].get_xticks())
 			axes[i].set_xticklabels(axes[i].get_xticklabels(), fontsize=fontsize)
@@ -97,7 +110,7 @@ def plot_regret(results_list, policies_names, horizon, fontsize=30, figsize=(40,
 			axes[i].set_xlabel("Horizon", fontsize=fontsize)
 			axes[i].set_ylabel("", fontsize=fontsize)
 	handles, labels = axes[0].get_legend_handles_labels()
-	axes[0].legend(handles, labels, fontsize=fontsize)
+	axes[0].legend(handles, labels, fontsize=fontsize, loc='upper center', bbox_to_anchor=(0.5, -0.1), fancybox=True, shadow=False)
 			
 	plt.savefig(f"{fig_title}.png", bbox_inches="tight")
 	plt.close()

@@ -126,15 +126,17 @@ class Reward(object):
 			the optimal diversity-wise selection for context or None if all explored
 		'''
 		assert aggreg_func is not None
-		available_items_ids = np.zeros(context.shape).ravel() #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
 			if (only_available):
 				return None
-		available_items = self.item_embeddings[available_items_ids,:]
+		#all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel()
+		available_items = self.item_embeddings[all_items,:]
 		pi = []
-		for k in range(K): ## build the oracle greedily as (we hope that) the diversity function is submodular
+		for k in range(K): ## build the oracle greedily as (we hope that) the diversity function is submodular and monotone
 			vals = np.array([
 					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=(None if (intra) else context), action_ids=np.array(pi+[i])) ) 
 					for i in range(available_items.shape[0]) if (i not in pi)
@@ -146,8 +148,7 @@ class Reward(object):
 			if (len(pi)>=K):
 				pi = np.array(pi)[:K]
 				break 
-		all_items = np.arange(available_items_ids.shape[0])
-		pi = all_items[available_items_ids][np.array(pi)]
+		pi = all_items[np.array(pi)]
 		return pi
 		
 	def get_oracle_reward(self, context, K, only_available=True):
@@ -170,16 +171,19 @@ class Reward(object):
 		pi : array of shape (K,) or None
 			the optimal reward-wise selection for context or None if all explored
 		'''
-		available_items_ids = np.zeros(context.shape).ravel() #get_available_actions(context)
+		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
 			if (only_available):
 				return None
-		available_items = self.item_embeddings[available_items_ids,:]
+		all_items = np.argwhere(available_items_ids==1).ravel()
+		#all_items = np.arange(available_items_ids.shape[0])
+		available_items = self.item_embeddings[all_items,:]
 		vals = self.get_means(context, available_items).flatten().tolist()
-		all_items = np.arange(available_items_ids.shape[0])
-		pi = all_items[available_items_ids][np.argsort(vals)[(-K):]]
+		ids = np.argsort(vals)[(-K):]
+		pi = all_items[ids]
+		assert (np.min([vals[i] for i in ids])>=np.max([vals[i] for i in range(len(vals)) if (i not in ids)]))
 		return pi
 		
 #####################
@@ -269,9 +273,9 @@ class SyntheticReward(Reward):
 		scores = compute_leverage_scores(action_categories)
 		if (context is None or context.sum()==0):
 			return scores
-		available_items_ids = np.zeros(context.shape).ravel().astype(bool) #get_available_actions(context)
-		context_categories = self.item_categories[~available_items_ids,:]
-		#context_embeddings = self.item_embeddings[~available_items_ids,:]
+		available_items_ids = get_available_actions(context)
+		context_categories = self.item_categories[np.argwhere(available_items_ids.ravel()==0).ravel(),:]
+		#context_embeddings = self.item_embeddings[np.argwhere(available_items_ids.ravel()==0).ravel(),:]
 		embs = np.concatenate((action_categories, context_categories), axis=0)
 		scores = compute_leverage_scores(embs)
 		return scores
@@ -453,7 +457,7 @@ def get_optimizer_by_group(model, optim_hyperparams):
         )
     return optimizer
 
-def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_size=1000, test_size=0.2, Sp=1., S=1., lr=0.01, seed=1234):
+def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_size=1000, test_size=0.2, Sp=1., S=1., lr=0.01, seed=1234, savename="movielens.pck"):
 	'''
 	See Appendix F.4 of Papini, Tirinzoni, Restelli, Lazaric and Pirotta (ICML'2021). 
 	Linearization: We train a neural network to regress from initial item embeddings to ratings by some of the users
@@ -541,7 +545,7 @@ def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_si
 	#plt.plot(range(len(all_testR2)), all_testR2, "r-", label="test R2")
 	#plt.ylim(-1, 1)
 	plt.legend()
-	plt.show()
+	plt.savefig(f"{savename.split('.pck')[0]}_training.png", bbox_inches="tight")
 	## Return coefficients + new (linear) item embeddings
 	Theta = network.Theta.detach().numpy()
 	Theta /= np.linalg.norm(Theta)/Sp
@@ -737,9 +741,9 @@ def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None,
 	ratings_ = ratings_[:nrat]
 	ratings_ = np.array(ratings_, dtype=object)
 	## 5. Reward 
-	theta, item_embeddings = learn_from_ratings(ratings_, items, min(emb_dim,items.shape[1]))
+	theta, item_embeddings = learn_from_ratings(ratings_, items, min(emb_dim,items.shape[1]), savename=savename)
 	emb_dim = item_embeddings.shape[1]
-	reward = SyntheticReward(item_embeddings, add_params=dict(theta=theta, item_categories=item_categories, p_visit=p_visit))
+	reward = SyntheticReward(item_embeddings.values, add_params=dict(theta=theta, item_categories=item_categories.values, p_visit=p_visit))
 	info = {"item_embeddings": item_embeddings, "user_embeddings": users, "item_categories": item_categories, "Phi": Phi}
 	with open(savename, "wb") as f:
 		pickle.dump(dict(ratings=ratings_,info=info,theta=theta,p_visit=p_visit), f)

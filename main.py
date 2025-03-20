@@ -38,6 +38,7 @@ elif (data_type=="movielens"):
 		reward = SyntheticReward(info["item_embeddings"].values, add_params=dict(theta=theta, item_categories=info["item_categories"].values, p_visit=p_visit))
 else:
 	raise ValueError(f"{data_type} is not implemented.")
+nitems = info["item_embeddings"].shape[0]
 	
 pretty_ratings = pd.DataFrame(ratings, columns=["user","item","#recommended","category_id","user_context","reward"], index=range(len(ratings)))
 print(pretty_ratings)

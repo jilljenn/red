@@ -123,7 +123,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			reg_reward = aggreg_func(reward.get_means(context, rt)) 
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]
 			results.update({policy.name: res})
-			if (True): #(verbose):
+			if (verbose):
 				print(f"{policy.name}: ||theta*-theta||_2={float(np.linalg.norm(reward.theta - policy.theta, 2))}\t||theta||_2={float(np.linalg.norm(policy.theta, 2))}") 
 			if (verbose):# or (t%int(horizon//10)==0)):
 				print(f"At t={t}, {policy.name} recommends items {rt_ids} to user {context.ravel()} (r={np.round(rrt,3)} (reward={np.round(reg_reward,3)}), dintra={np.round(dia,3)}, dinter={np.round(die,3)})")
@@ -164,7 +164,7 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1.0, verbose=
 	contexts : list of arrays of shape (N, 1)
 		the list of contexts at each round
 	'''
-	results = np.zeros((horizon, 2*k), dtype=int) 
+	results = np.nan*np.ones((horizon, 2*k), dtype=int) 
 	contexts = [context.copy()]
 	aggreg_func = choose_aggregation(aggreg)
 	
@@ -172,10 +172,11 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1.0, verbose=
 		rt_ids = policy.predict(context, k, only_available=only_available)
 		if (rt_ids is None):
 			rt_ids = policy.predict(context, k, only_available=False)
-		results[t-1,:k] = rt_ids 
+		kk = min(len(rt_ids),k)
+		results[t-1,:kk] = rt_ids 
 		rt = reward.item_embeddings[rt_ids,:]
 		yt = reward.get_reward(context, rt)
-		results[t-1,k:] = yt
+		results[t-1,k:(k+kk)] = yt
 		rrt = aggreg_func(yt)
 		
 		## update context
