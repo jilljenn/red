@@ -125,9 +125,8 @@ class LogisticPolicy_MLEFaury2020(Policy):
 ## Lee, J., & Oh, M. H. (2024). Nearly minimax optimal regret for multinomial logistic bandit. arXiv preprint arXiv:2405.09831.
 ## Lower computational and storage cost
 class LogisticPolicy(LogisticPolicy_MLEFaury2020): 
-	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5, reg_eta=0.01):
+	def __init__(self, info, random_state=1234, max_steps=5, lazy_update_fr=5):
 		super().__init__(info, random_state, max_steps, lazy_update_fr)
-		self.reg_eta = reg_eta
 		self.name = "Policy"
 		self.reg_lambda = self.dim
 		self.theta = np.zeros((self.dim,1)) 
@@ -164,22 +163,25 @@ class LogisticPolicy(LogisticPolicy_MLEFaury2020):
 		inv_Hk = deepcopy(self.design_matrix_inv)
 		for i in range(rec_items.shape[0]):
 			arm = self.f_mix(rec_items[i,:].reshape(1,-1), context.reshape(1, -1))
+			if (reward[i]==0):    ## ignore non visited rewards
+				return None   ##
 			self.arms.append(arm.ravel())
-			#print(("reward",reward[i]))
-			self.rewards.append(reward[i])
+			self.rewards.append((reward[i]+1)/2)
+			#self.design_matrix += np.outer(arm, arm)
 			xtheta = float(arm.dot(self.theta.reshape(-1,1)))
-			#XX = arm.T.dot(arm) 
+			XX = arm.T.dot(arm) 
 			self.design_matrix_inv = self.sm(self.design_matrix_inv, self.sigmoid(xtheta)*arm, arm)
-			#self.hessian += self.sigmoid(xtheta)*XX 
+			self.reg_lambda = self.dim * np.log(2 + len(self.rewards))
+			self.hessian += self.sigmoid(xtheta)*XX ## inverse of self.design_matrix_inv
 			## Online Mirror Descent
 			## Orabona, F. (2019). A modern introduction to online learning. arXiv preprint arXiv:1912.13213.
 			## Single projected gradient step
-			#Htk = Hk + self.reg_eta * self.gradsigmoid(xtheta)*XX
-			inv_Htk = self.sm(inv_Hk, self.reg_eta * self.gradsigmoid(xtheta) * arm, arm)
+			#Htk = Hk + self.reg_lambda * self.gradsigmoid(xtheta)*XX
+			inv_Htk = self.sm(inv_Hk, self.reg_lambda * self.gradsigmoid(xtheta) * arm, arm)
 			#print((xtheta, reward[i], arm.shape))
 			grad_l = (xtheta - reward[i])*arm.T
 			#print((thetak.shape, inv_Htk.dot(grad_l).shape))
-			thetakp = self.theta - self.reg_eta*inv_Htk.dot(grad_l)
+			thetakp = self.theta - self.reg_lambda*inv_Htk.dot(grad_l)
 			self.theta = thetakp.reshape(self.theta.shape)/float(np.linalg.norm(thetakp,2))
 			#print((arm.shape, thetak.shape, "1"))
 			xtheta = float(arm.dot(self.theta.reshape(-1,1)))
@@ -273,7 +275,7 @@ class CustomGreedy(Custom): ## UNCHECKED (TODO)
 		Recursively adds items to the subset
 		until it is of size k
 		Added item a is argmax of the score
-		Pi_{i in S+[a]} q[i]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T) (which is *not* a submodular function...)
+		Pi_{i in S+[a]} q[i]^alpha * det(Phi_{S+[a]}Phi_{S+[a]}^T) (which is *not* a monotonic function...)
 		where q[i] is the positive quality score for i
 		and Phi_{S} is the embedding matrix restricted to indices in S 
 		'''
@@ -308,7 +310,7 @@ class CustomSampling(Custom): ## UNCHECKED (TODO)
 		test_combs = [np.random.choice(range(len(qis)), p=None, replace=False, size=k).ravel().tolist() for _ in range(self.M)]
 		max_val, max_comb = -float("inf"), None
 		for comb in test_combs:
-			score = self.compute_qdd(qis, available_items_ids_lst[comb].tolist())
+			score = self.compute_qdd(qis, available_items_ids_lst[comb])
 			if (score > max_val):
 				max_comb = comb
 				max_val = score
@@ -372,7 +374,7 @@ class EpsilonGreedy(LogisticPolicy): ## CHECKED (debugged)
 		return all_items[ids_samples].flatten()
 		
 ## LogisticUCB-1 from Faury et al, 2020 https://arxiv.org/pdf/2002.07530
-class LogisticUCB1(LogisticPolicy_MLEFaury2020): ## UNCHECKED (TODO)
+class LogisticUCB1(LogisticPolicy):#(LogisticPolicy_MLEFaury2020): ## UNCHECKED (TODO)
 	def __init__(self, info, max_steps=5, lazy_update_fr=5, random_state=1234):
 		super().__init__(info, max_steps=max_steps, lazy_update_fr=lazy_update_fr, random_state=random_state)
 		self.name = "LogisticUCB1"

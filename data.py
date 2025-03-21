@@ -457,6 +457,7 @@ def get_optimizer_by_group(model, optim_hyperparams):
         )
     return optimizer
 
+## Papini, M., Tirinzoni, A., Restelli, M., Lazaric, A., & Pirotta, M. (2021, July). Leveraging good representations in linear contextual bandits. In International Conference on Machine Learning (pp. 8371-8380). PMLR.
 def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_size=1000, test_size=0.2, Sp=1., S=1., lr=0.01, seed=1234, savename="movielens.pck"):
 	'''
 	See Appendix F.4 of Papini, Tirinzoni, Restelli, Lazaric and Pirotta (ICML'2021). 

@@ -4,7 +4,8 @@ nratings: 500   ## number of ratings
 ncategories: 5   ## number of item categories
 exp_name: "synthetic1000"
 data_type: "synthetic"
-policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression"]
+policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","LinOASM","LogisticRegression"]
+#"DiversityDPP",
 #["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression", "CustomBruteForce"]
 emb_dim: 100      ## item embedding size
 emb_dim_user: 50  ## user embeddings size

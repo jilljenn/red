@@ -167,6 +167,8 @@ def simulate_trajectory(k, horizon, policy, reward, context, gamma=1.0, verbose=
 	results = np.nan*np.ones((horizon, 2*k), dtype=int) 
 	contexts = [context.copy()]
 	aggreg_func = choose_aggregation(aggreg)
+	if (verbose):
+		print(policy.name)
 	
 	for t in tqdm(range(1,horizon+1), leave=False):
 		rt_ids = policy.predict(context, k, only_available=only_available)
