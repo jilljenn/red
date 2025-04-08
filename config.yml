@@ -1,23 +1,23 @@
 nusers: 10       ## number of users
-nitems: 1000      ## number of items
+nitems: 100      ## number of items
 nratings: 500   ## number of ratings
 ncategories: 5   ## number of item categories
-exp_name: "synthetic1000"
+exp_name: "synthetic1000_3/synthetic100"
+file_name: ""
 data_type: "synthetic"
-policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","LinOASM","LogisticRegression"]
-#"DiversityDPP",
-#["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression", "CustomBruteForce"]
+policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression"] 
+# Too time-consuming: ["CustomBruteForce"]
 emb_dim: 100      ## item embedding size
 emb_dim_user: 50  ## user embeddings size
 
-k: 5            ## number of items to sample at each time
+k: 3            ## number of items to sample at each time
 seed: 1111       ## random seed
 horizon: 100     ## recommendation rounds
 p_visit: 1.0
 
-niters: 3        ## number of iterations
+niters: 5        ## number of iterations
 njobs: 1         ## number of parallel jobs
-gamma: 0.99       ## discounting factor for the time: do not choose gamma=1. otherwise actions might cancel themselves
+gamma: 1.        ## discounting factor for the time: do not choose gamma=1. otherwise actions might cancel themselves
 prob_new_user: 0.1
 verbose: false
 only_available: true

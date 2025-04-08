@@ -280,7 +280,7 @@ class SyntheticReward(Reward):
 		scores = compute_leverage_scores(embs)
 		return scores
 	
-def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=10, m=1, loc=0, scale=1, p_visit=0.9):
+def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=10, m=1, loc=0, scale=1, p_visit=0.9, random_seed=1234):
 	'''
 	Parameters
 	----------
@@ -305,6 +305,8 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 		the standard deviation of the data generating Gaussian distribution
 	p_visit : float
 		the probability of visiting a recommended item
+	random_seed : int
+		random seed
 		
 	Returns
 	-------
@@ -326,6 +328,7 @@ def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=1
 	reward : class Reward
 		the ground-truth reward for the problem
 	'''
+	seed_everything(int(random_seed))
 	## Generate item embeddings
 	item_embeddings = np.random.normal(loc, scale, size=(nitems, emb_dim))
 	item_embeddings /= np.linalg.norm(item_embeddings)
@@ -465,7 +468,7 @@ def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_si
 	Neural network: 2 hidden layers of size 256, ReLU activations, linear output layer of size 8
 	Feature extraction : last layer of the neural network
 	'''
-	seed_everything(seed)
+	seed_everything(int(seed))
 	network = MLP(item_embeddings, last_layer_width=emb_dim)
 	#ratings_train, ratings_test = ratings_[train_id], ratings_[[i for i in range(ratings_.shape[0]) if (i not in train_id)]]
 	#N, nf = item_embeddings.shape
@@ -554,7 +557,7 @@ def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_si
 	new_item_embeddings /= np.linalg.norm(new_item_embeddings)/S
 	return Theta, pd.DataFrame(new_item_embeddings, index=item_embeddings.index, columns=range(new_item_embeddings.shape[1]))
 		
-def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, p_visit=0.9, savename="movielens_instance.pck"):
+def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, p_visit=0.9, random_seed=1234, savename="movielens_instance.pck"):
 	'''
 	Parameters
 	----------
@@ -568,6 +571,8 @@ def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None,
 		the number of dimensions for user embeddings
 	p_visit : float
 		the probability of visiting a recommended item
+	random_seed : int
+		random seed
 	savename : str
 		the file name to which the instance will be stored
 		
@@ -591,6 +596,7 @@ def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None,
 	reward : class Reward
 		the ground-truth reward for the problem
 	'''
+	seed_everything(int(random_seed))
 	nusers=None
 	nitems=None
 	## Create the MovieLens data set
@@ -757,10 +763,11 @@ if __name__=="__main__":
 	emb_dim=512
 	emb_dim_user=11
 	p_visit=0.9
+	seed = 1234
 	print("_"*27)
 	if (True):
 		print("* SYNTHETIC")
-		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit)
+		ratings_, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit, random_seed=seed)
 		print("Ratings")
 		print(ratings_.shape)
 		print(ratings_[:5,:])
@@ -782,7 +789,7 @@ if __name__=="__main__":
 	if (True): 
 		print("* MOVIELENS")
 		if (not os.path.exists("movielens_instance.pck")):
-			ratings_, info, reward = movielens(nratings=None, ncategories=None, emb_dim=8, p_visit=p_visit, savename="movielens_instance.pck")
+			ratings_, info, reward = movielens(nratings=nratings, ncategories=None, emb_dim=8, p_visit=p_visit, random_seed=seed,  savename="movielens_instance.pck")
 		else:
 			with open("movielens_instance.pck", "rb") as f:
 				di = pickle.load(f)

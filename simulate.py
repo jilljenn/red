@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 from time import time
 import pickle
+import pandas as pd
 from copy import deepcopy
 
 from policies import *
@@ -133,6 +134,13 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			
 		with open(savefname, "wb") as f:
 			pickle.dump({"results": results, "t": t}, f)
+			
+	all_res = pd.DataFrame([], index=[policy.name for policy in trained_policies], 
+		columns=["rew-reg","rew-aggr","e-div-reg","a-div-reg"])
+	for policy in trained_policies:
+		res = results[policy.name]
+		all_res.loc[policy.name] = results[policy.name].sum(axis=0)
+	print(all_res)
 		
 	return results
 	

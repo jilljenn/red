@@ -34,7 +34,7 @@ def get_item_category_from_rating(rating):
 def get_rating_from_rating(rating):
 	return rating[5]
     
-def get_available_actions(context):
+def get_available_actions(context): ## works for gamma=1 and any only_available in {True, False}, or gamma!=0 and only_available=False
 	'''
 	Get the identifiers of non-previously recommended items
 	

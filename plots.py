@@ -100,8 +100,8 @@ def plot_regret(results_list, policies_names, horizon, fontsize=30, figsize=(40,
 				LB_CI = np.maximum(LB_CI, 0)
 			axes[i].fill_between(x.ravel(), LB_CI, UB_CI, alpha=0.2, color=colors[policy_name])
 			axes[i].set_xlim((0, horizon))
-			if (i!=1):
-				axes[i].set_ylim(bottom=0)
+			#if (i!=1):
+			#	axes[i].set_ylim(bottom=0)
 			axes[i].set_yticks(axes[i].get_yticks())
 			axes[i].set_xticks(axes[i].get_xticks())
 			axes[i].set_xticklabels(axes[i].get_xticklabels(), fontsize=fontsize)

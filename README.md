@@ -1,8 +1,8 @@
 ﻿## Installation of the environment
 
 ```bash
-conda create --name envir python=3.11.9 -y
-conda activate envir
+conda create --name redenvir python=3.11.9 -y
+conda activate redenvir
 
 python3 -m pip install -r requirements.txt
 

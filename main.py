@@ -9,6 +9,7 @@ from multiprocessing import cpu_count
 from tqdm import trange
 import json
 import os
+from subprocess import Popen
 
 from data import synthetic, movielens, SyntheticReward
 from simulate import single_run, single_trajectory
@@ -19,20 +20,26 @@ with open('config.yml', 'r') as f:
 	params = yaml.safe_load(f)
 for param, v in params.items():
 	globals()[param] = v
-with open(f"{params['exp_name']}_parameters.json", "w") as f:
-	json.dump(params, f, ensure_ascii=False)
 assert k<=emb_dim
 assert data_type in ["movielens","synthetic"]
 seed_everything(seed)
 
+if ("/" in exp_name):
+	assert not os.path.exists(f"{exp_name.split('/')[0]}")
+	proc = Popen(f"mkdir {exp_name.split('/')[0]}".split(" "))
+	proc.wait()
+
+with open(f"{params['exp_name']}_parameters.json", "w") as f:
+	json.dump(params, f, ensure_ascii=False)
+
 ## 1. Data generation
 if (data_type=="synthetic"):
-	ratings, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit)
+	ratings, info, reward = synthetic(nusers, nitems, nratings, ncategories, emb_dim=emb_dim, emb_dim_user=emb_dim_user, p_visit=p_visit, random_seed=seed)
 elif (data_type=="movielens"):
-	if (not os.path.exists(f"{exp_name}_movielens_instance.pck")):
-		ratings, info, reward = movielens(nratings=nratings, ncategories=ncategories, emb_dim=emb_dim,  emb_dim_user=emb_dim_user, p_visit=p_visit, savename=f"{exp_name}_movielens_instance.pck") 
+	if (not os.path.exists(f"{exp_name}_movielens_instance.pck" if (len(file_name)==0) else file_name)):
+		ratings, info, reward = movielens(nratings=nratings, ncategories=ncategories, emb_dim=emb_dim,  emb_dim_user=emb_dim_user, p_visit=p_visit, random_seed=seed, savename=f"{exp_name}_movielens_instance.pck") 
 	else:
-		with open(f"{exp_name}_movielens_instance.pck", "rb") as f:
+		with open(f"{exp_name}_movielens_instance.pck" if (len(file_name)==0) else file_name, "rb") as f:
 			di = pickle.load(f)
 		ratings, info, theta = [di[n] for n in ["ratings", "info", "theta"]]
 		reward = SyntheticReward(info["item_embeddings"].values, add_params=dict(theta=theta, item_categories=info["item_categories"].values, p_visit=p_visit))
