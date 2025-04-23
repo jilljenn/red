@@ -60,20 +60,20 @@ class Policy(object):
 			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
 			if (only_available):
 				return None
-		items = self.item_embeddings.values[available_items_ids,:]
 		all_items = np.argwhere(available_items_ids==1).ravel() 
+		items = self.item_embeddings.values[all_items,:]
 		#all_items = np.arange(available_items_ids.shape[0])
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
 		qis = self.sigmoid(X_user.dot(self.theta))            ## only the individual qi's for available items
-		ids_samples = self.model_predict(items, all_items, qis, k) ## selected k among the available indices
+		ids_samples = self.model_predict(items, all_items, context, qis, k) ## selected k among the available indices
 		assert len(ids_samples)==k
 		return all_items[ids_samples].flatten()
 		
 	def update(self, context, rec_items, reward, div_intra, div_inter):
 		raise NotImplemented
 		
-	def model_predict(self, items, all_items, qis, k):
+	def model_predict(self, items, all_items, context, qis, k):
 		raise NotImplemented
 		
 #############################################
@@ -110,13 +110,13 @@ class LogisticPolicy_MLEFaury2020(Policy):
 			reward = get_rating_from_rating(ratings[i])
 			if (reward != 0):
 				self.p_visit += 1
-				self.update(context, action, np.array([reward]), None, None)
+				self.update(context, action, np.array([reward]))
 			## ignore if reward = 0
 		self.p_visit /= ratings.shape[0]
 		
-	def update(self, context, rec_items, reward, div_intra, div_inter):
+	def update(self, context, rec_items, reward):
 		for i in range(rec_items.shape[0]):
-			arm = self.f_mix(rec_items[i,:].reshape(1,-1), context.reshape(1, -1))
+			arm = self.f_mix(rec_items[i,:].reshape(-1,1), context.reshape(-1, 1))
 			#if (reward[i]==0):    ## ignore non visited rewards
 			#	return None   ##
 			self.arms.append(arm.ravel())
@@ -127,19 +127,19 @@ class LogisticPolicy_MLEFaury2020(Policy):
 				/ (1 + np.dot(arm.T, np.dot(self.design_matrix_inv, arm)))
 			self.reg_lambda = self.dim * np.log(2 + len(self.rewards))
 			if (self.ctr%self.lazy_update_fr == 0) or (len(self.rewards)<200):
-				coeffs = self.sigmoid(np.array(self.arms).dot(self.theta)[:, None])
+				coeffs = self.sigmoid(self.theta.T.dot(np.array(self.arms))) #[:, None])
 				#try:
-				y = coeffs - np.array(self.rewards)[:, None]
+				y = coeffs - np.array(self.rewards).reshape(coeffs.shape) #[:, None]
 				#except ValueError:
 				#	print((np.array(self.arms).shape, self.theta.shape, coeffs.shape, np.array(self.rewards).shape))
 				#	raise ValueError
-				grad = self.reg_lambda * self.theta + np.sum(y * np.array(self.arms), axis=0)
+				grad = self.reg_lambda * self.theta + np.sum(y.T * np.array(self.arms).T, axis=1).reshape(self.theta.shape)
 				self.hessian = np.dot(np.array(self.arms).T,
 					coeffs * (1 - coeffs) * np.array(self.arms)) + self.reg_lambda * np.eye(self.dim)
 				self.theta -= np.linalg.solve(self.hessian, grad)
 			self.ctr += 1
 		
-	def model_predict(self, items, all_items, qis, k):
+	def model_predict(self, items, all_items, context, qis, k):
 		raise NotImplemented
 
 ## Online Mirror Descent: Zhang, Y. J., & Sugiyama, M. (2024). Online (multinomial) logistic bandit: Improved regret and constant computation cost. Advances in Neural Information Processing Systems, 36.
@@ -182,7 +182,7 @@ class LogisticPolicy(LogisticPolicy_MLEFaury2020):
 	def update(self, context, rec_items, reward, div_intra, div_inter):
 		inv_Hk = deepcopy(self.design_matrix_inv)
 		for i in range(rec_items.shape[0]):
-			arm = self.f_mix(rec_items[i,:].reshape(1,-1), context.reshape(1, -1))
+			arm = self.f_mix(rec_items[i,:].reshape(-1,1), context.reshape(-1, 1))
 			if (reward[i]==0):    ## ignore non visited rewards
 				return None   ##
 			self.arms.append(arm.ravel())
@@ -204,10 +204,10 @@ class LogisticPolicy(LogisticPolicy_MLEFaury2020):
 			thetakp = self.theta - self.reg_lambda*inv_Htk.dot(grad_l)
 			self.theta = thetakp.reshape(self.theta.shape)/float(np.linalg.norm(thetakp,2))
 			#print((arm.shape, thetak.shape, "1"))
-			xtheta = float(arm.dot(self.theta))
+			xtheta = float(self.theta.dot(arm))
 			inv_Hk = self.sm(inv_Hk, self.gradsigmoid(xtheta)*arm, arm)
 			
-	def model_predict(self, items, all_items, qis, k):
+	def model_predict(self, items, all_items, context, qis, k):
 		raise NotImplemented
 	
 ## Apply Stochastic gradient descent to regress on theta (the fastest but no guarantees)		
@@ -247,7 +247,7 @@ class SGDRegressor(Policy):
 		self.model.partial_fit(X_user, Y_user)
 		self.theta = self.model.coef_.reshape(-1,1)
 		
-	def model_predict(self, items, all_items, qis, k):
+	def model_predict(self, items, all_items, context, qis, k):
 		raise NotImplemented
 
 ## Below, choose any of the three super classes for theta estimators: "SGDRegressor", "LogisticPolicy", "LogisticPolicy_MLEFaury2020"
@@ -273,8 +273,8 @@ class Custom(Estimator):
 		self.clean()
 		
 	def get_L(self, qis, S=None):
-		qis -= np.min(qis)-1 ## ensures positive scores
-		quality = np.power(qis, self.alpha)
+		## sigmoid ensures positive scores
+		quality = np.power(self.sigmoid(qis), self.alpha)
 		Q = np.diag(quality.ravel())
 		Phi = self.item_embeddings.values if (S is None) else self.item_embeddings.values[S,:] 
 		return [Q, Phi]
@@ -304,7 +304,7 @@ class Custom(Estimator):
 		scores = quality + diversity
 		return scores
 			
-	def model_predict(self, items, all_items, qis, k):
+	def model_predict(self, items, all_items, context, qis, k):
 		Q, Phi = self.get_L(qis, all_items)
 		f_score = eval(f"self.compute_{self.stype}")
 		ids_samples = self.sample(Q, Phi, k, f_score)
@@ -353,18 +353,9 @@ class CustomGreedy(Custom): ## UNCHECKED (TODO)
 		where q[i] is the positive quality score for i
 		and Phi_{S} is the embedding matrix restricted to indices in S 
 		'''
-		max_comb = []
-		N = Q.shape[0]
-		while True:
-			all_scores = [f_score(Q, Phi, max_comb+[j]) if (j not in max_comb) else -float("inf") for j in range(N)]
-			if (np.max(all_scores)==-float("inf")):
-				break
-			candidates = np.argwhere(all_scores == np.max(all_scores)).ravel().tolist()
-			if (len(max_comb)+len(candidates)>k):
-				max_comb += np.random.choice(candidates, p=None, size=k-len(max_comb)).ravel().tolist()
-				break
-			else:
-				max_comb += candidates
+		def f_set(aitems, aindices):
+			return f_score(Q, Phi, aindices)
+		max_comb = greedy_opt(f_set, Q, k)
 		return max_comb
 
 ## Find K maximizers sampling M sets at random
@@ -403,9 +394,7 @@ class CustomDPP(Custom): ## UNCHECKED (TODO)
 		'''
 		Samples according to the L-ensemble
 		where L = Q.Phi.Phi^T.Q
-		
-		Samples M subsets of size k at random
-		and returns the subset S that maximizes
+		the subset S that maximizes
 		det(L_S)
 		where Q is the diagonal matrix of positive quality scores
 		and Phi is the item embedding matrix 
@@ -429,7 +418,7 @@ class EpsilonGreedy(Estimator): ## CHECKED (debugged)
 		self.epsilon = epsilon
 		self.clean()
 			
-	def model_predict(self, items, all_items, qis, k):
+	def model_predict(self, items, all_items, context, qis, k):
 		ids_samples = np.argsort(qis.ravel())[-k:]
 		eps = np.random.choice([False,True], p=[1-self.epsilon, self.epsilon], size=k).ravel()
 		if (np.sum(eps)>0): ## not in ids_samples for diversity
@@ -496,7 +485,7 @@ class LogisticUCB1(Estimator):#(LogisticPolicy_MLEFaury2020): ## UNCHECKED (TODO
 		# select arm
 		qis = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
 		
-		ids_samples = self.model_predict(qis, all_items, k)
+		ids_samples = self.model_predict(qis, all_items, context, k)
 		
 		# update design matrix and inverse
 		#self.design_matrix += np.outer(arm, arm)
@@ -508,7 +497,7 @@ class LogisticUCB1(Estimator):#(LogisticPolicy_MLEFaury2020): ## UNCHECKED (TODO
 		assert len(ids_samples)==k
 		return all_items[ids_samples].flatten()
 		
-	def model_predict(self, qis, all_items, k):
+	def model_predict(self, qis, all_items, context, k):
 		ids_samples = np.argsort(qis)[-k:].ravel()
 		return ids_samples
 		
@@ -562,7 +551,7 @@ class LinOASM(LogisticUCB1): ## UNCHECKED (TODO)
 				max_comb += candidates
 		return max_comb
 		
-	def model_predict(self, qis, all_items, k):
+	def model_predict(self, qis, all_items, context, k):
 		Q, Phi = self.get_L(qis, all_items)
 		ids_samples = self.sample(Q, Phi, k, self.compute_logqdd)
 		return ids_samples

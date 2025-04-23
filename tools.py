@@ -5,6 +5,38 @@ import torch
 import os
 import random
 
+def greedy_opt(f_set, available_items, K):
+    '''
+    Applies the greedy K-maximization algorithm with
+    theoretical guarantees for submodular monotone set functions
+    		
+    ---
+    Parameters
+    f_set : Python function
+        the set function with a single argument: a set of n items and their corresponding indices, with 1 <= n <= K
+    available_items : array of shape (N, d)
+        items of dimension d
+    K : int
+        the size of the subset to return
+	
+    ---
+    Returns
+    pi : array of shape (K,)
+        the indices of items belonging to the greedy maximizing K-subset
+    '''
+    pi = []
+    N = available_items.shape[0]
+    assert N>K
+    for k in range(K): ## build the oracle greedily as (we hope that) the set function is submodular and monotone
+        vals = np.array([ f_set(available_items[pi+[i],:], pi+[i]) for i in range(N) if (i not in pi) ]).ravel()
+        if (len(vals)==0):
+            raise ValueError
+        pi += np.argwhere(vals == np.max(vals)).ravel().tolist()
+        if (len(pi)>=K):
+            pi = np.array(pi)[:K].tolist()
+            break 
+    return np.array(pi)
+
 def seed_everything(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -34,7 +66,7 @@ def get_item_category_from_rating(rating):
 def get_rating_from_rating(rating):
 	return rating[5]
     
-def get_available_actions(context): ## works for gamma=1 and any only_available in {True, False}, or gamma!=0 and only_available=False
+def get_available_actions(context): ## works for gamma=1 and any only_available in {True, False}, or gamma!=1 and only_available=False
 	'''
 	Get the identifiers of non-previously recommended items
 	

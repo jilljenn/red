@@ -100,11 +100,11 @@ class Reward(object):
 		'''
 		raise NotImplemented
 		
-	def get_oracle_diversity(self, context, K, aggreg_func=np.sum, intra=False, only_available=True):
+	def get_oracle_diversity(self, context, K, intra=False, only_available=True):
 		'''
 		Obtains the optimal selection for the input context
 		with respect to the diversity score by greedily adding
-		new items to the selection according to their interbatch 
+		new items to the selection according to their inter/intrabatch 
 		diversity score
 		
 		---
@@ -113,8 +113,6 @@ class Reward(object):
 			the feedback observed in the past
 		K : int
 			the number of actions to select
-		aggreg_func : Python function [default=np.sum]
-			the aggregation function for diversity scores (since diversity depends on other items)
 		intra : bool [default=False]
 			computes the intrabatch diversity instead of 
 			interbatch diversity if set to True
@@ -125,7 +123,6 @@ class Reward(object):
 		pi : array of shape (K,) or None
 			the optimal diversity-wise selection for context or None if all explored
 		'''
-		assert aggreg_func is not None
 		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
 		if (available_items_ids.sum()==0):
 			#print(f"All items are explored for user {context_array2int(context, self.m)}")
@@ -134,21 +131,12 @@ class Reward(object):
 				return None
 		#all_items = np.arange(available_items_ids.shape[0])
 		all_items = np.argwhere(available_items_ids==1).ravel()
-		available_items = self.item_embeddings[all_items,:]
-		pi = []
-		for k in range(K): ## build the oracle greedily as (we hope that) the diversity function is submodular and monotone
-			vals = np.array([
-					aggreg_func( self.get_diversity(available_items[pi+[i],:], context=(None if (intra) else context), action_ids=np.array(pi+[i])) ) 
-					for i in range(available_items.shape[0]) if (i not in pi)
-				])
-			vals = vals.flatten().tolist()
-			if (len(vals)==0):
-				break
-			pi += np.argwhere(vals == np.max(vals)).flatten().tolist()
-			if (len(pi)>=K):
-				pi = np.array(pi)[:K]
-				break 
-		pi = all_items[np.array(pi)]
+		available_items = self.item_embeddings[all_items,:] 
+		def f_set(aitems, aindices):
+			return self.get_diversity(aitems, context=(None if (intra) else context), action_ids=np.array(aindices))
+		pi = greedy_opt(f_set, available_items, K)
+		assert len(pi)==K
+		pi = all_items[np.array(pi)].flatten()
 		return pi
 		
 	def get_oracle_reward(self, context, K, only_available=True):
@@ -177,13 +165,14 @@ class Reward(object):
 			available_items_ids = np.ones(available_items_ids.shape, dtype=int)
 			if (only_available):
 				return None
-		all_items = np.argwhere(available_items_ids==1).ravel()
-		#all_items = np.arange(available_items_ids.shape[0])
+		all_items = np.argwhere(available_items_ids==1).ravel() 
 		available_items = self.item_embeddings[all_items,:]
-		vals = self.get_means(context, available_items).flatten().tolist()
-		ids = np.argsort(vals)[(-K):]
-		pi = all_items[ids]
-		assert (np.min([vals[i] for i in ids])>=np.max([vals[i] for i in range(len(vals)) if (i not in ids)]))
+		#all_items = np.arange(available_items_ids.shape[0])
+		qis = self.get_means(context, available_items).flatten().tolist() ## only the individual qi's for available items
+		ids_samples = np.argsort(qis)[(-K):]
+		assert len(ids_samples)==K
+		pi = all_items[ids_samples].flatten()
+		assert (np.min([qis[i] for i in ids_samples])>=np.max([qis[i] for i in range(len(qis)) if (i not in ids_samples)]))
 		return pi
 		
 #####################
@@ -216,20 +205,26 @@ class SyntheticReward(Reward):
 		self.name = "Synthetic"
 		self.item_categories = add_params["item_categories"]
 		self.theta = add_params["theta"]/np.linalg.norm(add_params["theta"])
+		assert self.theta.shape[1]==1
 		self.p_visit = add_params["p_visit"]
 		self.kernel = linear_kernel
 		self.LAMBDA = 0.01
 		
 	def f_mix(self, action, context):
+		assert action.shape[1]==context.shape[1]
 		phi = np.concatenate((action, context), axis=0)
 		assert phi.shape[0] == self.theta.shape[0]
 		return phi
 	
 	def get_means(self, context, action_embeddings=None):
+		'''
+		Obtains the expected rewards of actions i wrt context c
+		
+		mu_{i,c} = sigmoid(theta.T.dot([i, c]))
+		''' 
 		if (action_embeddings is None):
 			action_embeddings = self.item_embeddings
 		K = action_embeddings.shape[0]
-		N = self.item_embeddings.shape[0]
 		means = np.zeros(K)
 		#available_items_ids = get_available_actions(context)
 		#context_categories = self.item_categories[~available_items_ids,:].sum(axis=0)
@@ -237,12 +232,17 @@ class SyntheticReward(Reward):
 			xk = self.f_mix(action_embeddings[k].reshape(-1,1), context.reshape(-1,1))
 			means[k] = self.theta.T.dot(xk)[0,0]
 			#means[k] = context_categories.dot(self.Phi.dot(action_embeddings[k].reshape(-1,1)))
-		return means
+		return expit(means)
 		
 	def get_reward(self, context, action_embeddings):
+		'''
+		Obtains the noisy rewards of actions wrt context
+
+		if mu_{i,c} = sigmoid(theta.T.dot([i, c])) then
+		r_{i,c} = -1 with proba (1-mu_{i,c})*p_visit, +1 with proba mu_{i,c}*p_visit, 0 with proba 1-p_visit
+		'''
 		K = action_embeddings.shape[0]
-		means = self.get_means(context.reshape(1,-1), action_embeddings)
-		ps = expit(means)
+		ps = self.get_means(context, action_embeddings) 
 		reward = np.zeros((K,))
 		p_visits = np.random.choice([0,1], p=[1-self.p_visit, self.p_visit], size=(K,))
 		for k in range(K):
@@ -254,31 +254,28 @@ class SyntheticReward(Reward):
 	def get_diversity(self, action_embeddings_positive=None, context=None, action_ids=None):
 		'''
 		Obtains the diversity across items by computing
-		ridge leverage scores from [1, Def 1] with a linear kernel
-		on the item categories
+		the determinant on a subset of a kernel K on the item embeddings
 		
-		[1] Musco, Cameron, and Christopher Musco. "Recursive sampling for the nystrom method." 
-		Advances in neural information processing systems 30 (2017).
+		K_{I,I} is the restriction of K to indices in I
+		Intrabatch diversity of batch S: |det(K_{S,S})|
+		Interbatch diversity of batch S wrt context H: |det(P(S,S))|
+		where P = K @ K.T - (K @ K_{H,H}.T) @ np.linalg.inv(K_{H,H} @ K_{H,H}.T) @ (K_{H,H} @ K.T)
+		(determinant of the kernel conditioned on the context)
 		''' 
 		if ((action_embeddings_positive is None) or (action_ids is None)):
 			action_embeddings_positive = self.item_embeddings
 			actions_ids = np.arange(self.item_embeddings.shape[0])
-		## from https://github.com/jilljenn/red/blob/main/notebooks/RED%20Tutorial.ipynb
-		def compute_leverage_scores(embs):
-			kernel = self.kernel(embs)
-			return ( np.diagonal(kernel @ np.linalg.inv(kernel + self.LAMBDA * np.identity(len(kernel)))) ).ravel()
-		if (len(action_embeddings_positive)==0 or len(action_ids)==0):
-			return 0
-		action_categories = self.item_categories[action_ids,:]
-		scores = compute_leverage_scores(action_categories)
+		## from https://github.com/jilljenn/red/blob/main/notebooks/Conditional%20DPP.ipynb
+		X = self.item_embeddings
+		XS = X[action_ids,:]
+		KSS = self.kernel(XS)
+		score = np.abs(np.linalg.det(KSS))
 		if (context is None or context.sum()==0):
-			return scores
-		available_items_ids = get_available_actions(context)
-		context_categories = self.item_categories[np.argwhere(available_items_ids.ravel()==0).ravel(),:]
-		#context_embeddings = self.item_embeddings[np.argwhere(available_items_ids.ravel()==0).ravel(),:]
-		embs = np.concatenate((action_categories, context_categories), axis=0)
-		scores = compute_leverage_scores(embs)
-		return scores
+			return score ## intrabatch diversity
+		PHH = X @ X.T - (X @ XS.T) @ np.linalg.inv(XS @ XS.T) @ (XS @ X.T) ## conditioning on context
+		PHHSS = PHH[action_ids,:][:,action_ids]
+		score = np.abs(np.linalg.det(PHHSS))
+		return score
 	
 def synthetic(nusers, nitems, nratings, ncategories, emb_dim=512, emb_dim_user=10, m=1, loc=0, scale=1, p_visit=0.9, random_seed=1234):
 	'''
@@ -555,7 +552,7 @@ def learn_from_ratings(ratings_, item_embeddings, emb_dim, nepochs=100, batch_si
 	Theta /= np.linalg.norm(Theta)/Sp
 	new_item_embeddings = network.layers(torch.Tensor(item_embeddings.values)).detach().numpy()
 	new_item_embeddings /= np.linalg.norm(new_item_embeddings)/S
-	return Theta, pd.DataFrame(new_item_embeddings, index=item_embeddings.index, columns=range(new_item_embeddings.shape[1]))
+	return Theta.reshape(-1,1), pd.DataFrame(new_item_embeddings, index=item_embeddings.index, columns=range(new_item_embeddings.shape[1]))
 		
 def movielens(nratings=None, ncategories=None, emb_dim=None,  emb_dim_user=None, p_visit=0.9, random_seed=1234, savename="movielens_instance.pck"):
 	'''

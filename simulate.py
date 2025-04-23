@@ -72,7 +72,7 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])
 		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids) 
 		div_intra = reward.get_diversity(rt, action_ids=rt_ids) 
-		r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
+		r, d, dd = [np.round(x,3) for x in [aggreg_func(means), div_intra, div_inter]] # aggreg_func(div_intra), aggreg_func(div_inter)]]
 		if (verbose):# or (t%int(horizon//10)==0)):
 			print(f"At t={t}, Reward Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
 		#res = results["oracle reward"]
@@ -81,30 +81,30 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 		best_reward = aggreg_func(means)
 		
 		## 2. Oracle for interbatch diversity
-		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func, only_available=only_available)
+		rt_ids = reward.get_oracle_diversity(context, k, only_available=only_available) #aggreg_func, only_available=only_available)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)
 		#div_inter = reward.get_diversity(rt[means.flatten()>0,:], context=context, action_ids=rt_ids[means.flatten()>0]) ## true
 		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)  ## to get positive regret: given context, what (deterministic) action is best
 		div_intra = reward.get_diversity(rt, action_ids=rt_ids)
-		best_diversity_inter = aggreg_func(div_inter)
+		best_diversity_inter = div_inter #aggreg_func(div_inter)
 		#res = results["oracle diversity"]
 		#res[t-1,:] = [aggreg_func(means), div_intra, div_inter]
 		#results.update({"oracle diversity": res})
 		if (verbose):# or (t%int(horizon//10)==0)):
-			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
+			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), div_intra, div_inter]] #aggreg_func(div_intra), aggreg_func(div_inter)]]
 			print(f"At t={t}, InterDiversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
 		
 		## 3. Oracle for intrabatch diversity
-		rt_ids = reward.get_oracle_diversity(context, k, aggreg_func, intra=True, only_available=only_available)
+		rt_ids = reward.get_oracle_diversity(context, k, intra=True, only_available=only_available) #aggreg_func, intra=True, only_available=only_available)
 		rt = reward.item_embeddings[rt_ids,:]
 		means = reward.get_means(context, rt)	
 		#div_intra = reward.get_diversity(rt[means.flatten()>0,:], action_ids=rt_ids[means.flatten()>0])                  ## true
 		div_inter = reward.get_diversity(rt, context=context, action_ids=rt_ids)
 		div_intra = reward.get_diversity(rt, action_ids=rt_ids)                  ## to get positive regret: given context, what (deterministic) action is best
-		best_diversity_intra = aggreg_func(div_intra)
+		best_diversity_intra = div_intra #aggreg_func(div_intra)
 		if (verbose):# or (t%int(horizon//10)==0)):
-			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), aggreg_func(div_intra), aggreg_func(div_inter)]]
+			r, d, dd = [np.round(x,3) for x in [aggreg_func(means), div_intra, div_inter]] # aggreg_func(div_intra), aggreg_func(div_inter)]]
 			print(f"At t={t}, IntraDiversity Oracle recommends items {rt_ids} to user {context.ravel()} (r={r}, dintra={d}, dinter={dd})")
 		
 		for policy in trained_policies:
@@ -118,8 +118,8 @@ def simulate(k, horizon, trained_policies, reward, user_contexts, prob_new_user=
 			res = results[policy.name]
 			#res[t-1,:] = [aggreg_func(yt)*gamma**t, div_intra, div_inter]
 			rrt = aggreg_func(yt)
-			dia = aggreg_func(div_intra)
-			die = aggreg_func(div_inter)
+			dia = div_intra #aggreg_func(div_intra)
+			die = div_inter #aggreg_func(div_inter)
 			policy.update(context, rt, yt, div_intra, div_inter)
 			reg_reward = aggreg_func(reward.get_means(context, rt)) 
 			res[t-1,:] = [(best_reward - reg_reward)*gamma**t, rrt, best_diversity_intra - dia, best_diversity_inter - die]

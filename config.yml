@@ -1,23 +1,23 @@
-nusers: 10       ## number of users
-nitems: 100      ## number of items
-nratings: 500   ## number of ratings
+nusers: 5       ## number of users
+nitems: 200      ## number of items
+nratings: 1000   ## number of ratings
 ncategories: 5   ## number of item categories
-exp_name: "synthetic1000_3/synthetic100"
+exp_name: "synthetic100_EstimatorFaury/"
 file_name: ""
 data_type: "synthetic"
 policies: ["CustomDPP","CustomGreedy","CustomSampling","EpsilonGreedy","LogisticUCB1","DiversityDPP","LinOASM","LogisticRegression"] 
 # Too time-consuming: ["CustomBruteForce"]
 emb_dim: 100      ## item embedding size
-emb_dim_user: 50  ## user embeddings size
+emb_dim_user: 10  ## user embeddings size
 
 k: 3            ## number of items to sample at each time
 seed: 1111       ## random seed
-horizon: 100     ## recommendation rounds
+horizon: 10 #1000     ## recommendation rounds
 p_visit: 1.0
 
 niters: 5        ## number of iterations
 njobs: 1         ## number of parallel jobs
-gamma: 1.        ## discounting factor for the time: do not choose gamma=1. otherwise actions might cancel themselves
+gamma: 1.1        ## discounting factor for the time: do not choose gamma=1. otherwise actions might cancel themselves
 prob_new_user: 0.1
 verbose: false
 only_available: true
