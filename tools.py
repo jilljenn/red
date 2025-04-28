@@ -83,6 +83,23 @@ def get_available_actions(context): ## works for gamma=1 and any only_available 
 	action_ids = (context==0).ravel()
 	return action_ids
 	
+def get_unavailable_actions(context): ## works for gamma=1 and any only_available in {True, False}, or gamma!=1 and only_available=False
+	'''
+	Get the identifiers of previously recommended items
+	
+	Parameters
+	--
+	context : array of shape (1, L)
+		the user history
+	
+	Returns
+	--
+	action_ids : array of shape (N, 1)
+		the binary array of available actions
+	'''
+	action_ids = (context!=0).ravel()
+	return action_ids
+	
 def choose_aggregation(aggreg):
 	if (aggreg=="sum"):
 		aggreg_func = np.sum

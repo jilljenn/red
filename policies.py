@@ -394,12 +394,52 @@ class CustomDPP(Custom): ## UNCHECKED (TODO)
 		'''
 		Samples according to the L-ensemble
 		where L = Q.Phi.Phi^T.Q
-		the subset S that maximizes
+		the subset S proportionally to
 		det(L_S)
 		where Q is the diagonal matrix of positive quality scores
 		and Phi is the item embedding matrix 
 		'''
 		K = Q.dot(Phi)
+		L = K.dot(K.T)
+		self.DPP = FiniteDPP('likelihood', **{'L': L})
+		self.DPP.sample_exact_k_dpp(size=k, random_state=self.random_state)
+		lst = self.DPP.list_of_samples[0]
+		return lst
+		
+class CustomCondDPP(Custom): 
+	def __init__(self, info, alpha=1., eta=1., stype=["logqdd", "qdtr"][0], random_state=1234, max_steps=5, lazy_update_fr=5):
+		super().__init__(info, random_state=random_state)
+		self.name = "CustomCondDPP"
+		self.alpha = alpha
+		self.eta = eta
+		self.stype = stype
+		self.clean()
+			
+	def model_predict(self, items, all_items, context, qis, k):
+		Q, Phi = self.get_L(qis, all_items)
+		all_rec_items = np.argwhere(get_unavailable_items(context)==1).ravel() 
+		_, Phi_H = self.get_L(qis, all_rec_items)
+		f_score = eval(f"self.compute_{self.stype}")
+		ids_samples = self.sample(Q, Phi, Phi_H, all_items, k, f_score)
+		return ids_samples
+		
+	def sample(self, Q, Phi, Phi_H, all_items, k, f_score=None):
+		'''
+		Samples according to the L-ensemble
+		where L = Q.Phi.Phi^T.Q
+		the subset S proportionally to
+		det(L_S)
+		where Q is the diagonal matrix of positive quality scores
+		and Phi is the item embedding matrix 
+		and P = K @ K.T - (K @ K_{H,H}.T) @ np.linalg.inv(K_{H,H} @ K_{H,H}.T) @ (K_{H,H} @ K.T)
+		(determinant of the kernel conditioned on the context)
+		'''
+		_, Phi_all = self.get_L(np.diag(Q), None)
+		if (len(all_rec_items)==0):
+			K = Q.dot(Phi)
+		else:
+			PHH = Phi_all @ Phi_all.T - (Phi_all @ Phi_H.T) @ np.linalg.inv(Phi_H @ Phi_H.T) @ (Phi_H @ Phi_all.T) ## conditioning on context
+			K = Q.dot(PHH[all_items,:][:,all_items])
 		L = K.dot(K.T)
 		self.DPP = FiniteDPP('likelihood', **{'L': L})
 		self.DPP.sample_exact_k_dpp(size=k, random_state=self.random_state)
@@ -465,39 +505,22 @@ class LogisticUCB1(Estimator):#(LogisticPolicy_MLEFaury2020): ## UNCHECKED (TODO
 		bonus = ucb_bonus * norm
 		return pred_reward + bonus
 		
-	def predict(self, context, k, only_available=True):
-		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
-		if (available_items_ids.sum()==0):
-			#print(f"All items are explored for user {context_array2int(context, 1)}")
-			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
-			if (only_available):
-				return None
-		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.argwhere(available_items_ids==1).ravel() 
-		#all_items = np.arange(available_items_ids.shape[0])
+	def model_predict(self, items, all_items, context, qis, k):
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
-		
 		arm_set = np.array(X_user)
 		## https://github.com/louisfaury/logistic_bandit/blob/master/logbexp/algorithms/logistic_ucb_1.py
 		# update bonus bonus
 		ucb_bonus = self.update_ucb_bonus()
 		# select arm
 		qis = [self.compute_optimistic_reward(arm_set[i_arm,:], ucb_bonus) for i_arm in range(len(arm_set))]
-		
 		ids_samples = self.model_predict(qis, all_items, context, k)
-		
 		# update design matrix and inverse
 		#self.design_matrix += np.outer(arm, arm)
-		for i in ids_samples:
-			arm = np.reshape(arm_set[i,:], (-1,))
-			self.design_matrix_inv += -np.dot(self.design_matrix_inv, np.dot(np.outer(arm, arm), self.design_matrix_inv)) \
-				/ (1 + np.dot(arm, np.dot(self.design_matrix_inv, arm)))
-		
-		assert len(ids_samples)==k
-		return all_items[ids_samples].flatten()
-		
-	def model_predict(self, qis, all_items, context, k):
+		#for i in ids_samples:
+		#	arm = np.reshape(arm_set[i,:], (-1,))
+		#	self.design_matrix_inv += -np.dot(self.design_matrix_inv, np.dot(np.outer(arm, arm), self.design_matrix_inv)) \
+		#		/ (1 + np.dot(arm, np.dot(self.design_matrix_inv, arm)))
 		ids_samples = np.argsort(qis)[-k:].ravel()
 		return ids_samples
 		
@@ -577,23 +600,12 @@ class LogisticRegression(CustomGreedy): ## UNCHECKED (TODO)
 		self.model.partial_fit(X_user[ids,:], Y_user[ids], list(sorted(np.unique(Y_user.astype(int)))))
 		self.theta = self.model.coef_
 		
-	def predict(self, context, k, only_available=True):
-		available_items_ids = get_available_actions(context) if (only_available) else np.zeros(context.shape[0], dtype=bool)
-		if (available_items_ids.sum()==0):
-			#print(f"All items are explored for user {context_array2int(context, 1)}")
-			available_items_ids = np.ones(available_items_ids.shape, dtype=bool)
-			if (only_available):
-				return None
-		items = self.item_embeddings.values[available_items_ids,:]
-		all_items = np.argwhere(available_items_ids==1).ravel() 
-		#all_items = np.arange(available_items_ids.shape[0])
+	def model_predict(self, items, all_items, context, qis, k):
 		contexts = np.tile(context.reshape(1,-1), (items.shape[0], 1))
 		X_user = self.f_mix(items, contexts)
-		
 		qis = self.model.predict_proba(X_user)[:,np.argwhere(self.model.classes_==1)].ravel()
 		Q, Phi = self.get_L(qis, all_items)
 		ids_samples = self.sample(Q, Phi, k, self.compute_logqdd)
-		
 		assert len(ids_samples)==k
 		return all_items[ids_samples].flatten()
 		

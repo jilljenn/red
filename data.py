@@ -271,8 +271,10 @@ class SyntheticReward(Reward):
 		KSS = self.kernel(XS)
 		score = np.abs(np.linalg.det(KSS))
 		if (context is None or context.sum()==0):
-			return score ## intrabatch diversity
-		PHH = X @ X.T - (X @ XS.T) @ np.linalg.inv(XS @ XS.T + self.LAMBDA) @ (XS @ X.T) ## conditioning on context
+			return score ## intrabatch or interbatch (without context) diversity
+		history = get_unavailable_actions(context)
+		XH = X[history,:]
+		PHH = X @ X.T - (X @ XH.T) @ np.linalg.inv(XH @ XH.T) @ (XH @ X.T) ## conditioning on context
 		PHHSS = PHH[action_ids,:][:,action_ids]
 		score = np.abs(np.linalg.det(PHHSS))
 		return score
